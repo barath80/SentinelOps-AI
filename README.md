@@ -6,7 +6,20 @@ SentinelOps AI is an AI-assisted reliability operations platform for cloud appli
 
 > **Design principle:** never confuse a plausible explanation with a proven cause; never treat an executed action as a verified recovery.
 
-**Status:** design / planning. This README describes the intended implementation (blueprint dated 26 October 2026). Nothing below is claimed as built yet, and the project does not claim to be globally novel. Its contribution is a testable workflow and benchmark.
+**Status:** working prototype, not yet deployed. The blueprint below is the plan; this section says what exists. The demo shop is live at https://shopsphere-demo-beta.vercel.app (orders in Neon Postgres). The SentinelOps API and dashboard run locally and are prepared for deployment ([docs/deploy-api.md](docs/deploy-api.md)).
+
+| Built and tested | Where |
+| --- | --- |
+| ShopSphere demo shop with fault injection (S01, S03, S05) | [apps/shop-web](apps/shop-web) |
+| Telemetry ingestion (JSON, text and normalized adapters), idempotent | [services/sentinel-api](services/sentinel-api) |
+| Anomaly detection, incident grouping, ranked hypotheses, evidence ledger, per-symptom attribution | `app/analysis/` |
+| Falsification tests and investigation loop (explicit stop reasons, `falsified` state) | `app/analysis/diagnostics.py` |
+| Policy engine, recovery contracts, four-eyes approval, audit trail, SLO verification (pass / fail / inconclusive) | `app/recovery/` |
+| Incident-to-prevention compiler (regression test, alert rule, runbook, monitoring gaps) with human review | `app/prevention.py` |
+| Dashboard at `/ui/` | `app/ui/` |
+| Benchmark against baselines with hidden ground truth | [docs/benchmark-results.md](docs/benchmark-results.md) |
+
+**Not built:** recovery rehearsal in a sandbox copy, failure-propagation graph, rollback of failed actions, real authentication, live LLM baseline run (needs an API key), and scenarios S02, S04, S06, S07, S11. The benchmark scenarios were written by the same author as the system, so its results show the pipeline works, not that it generalizes. See each document's limits section before relying on a number.
 
 ## Research question
 

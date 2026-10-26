@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     shop_admin_url: str = ""
     shop_admin_token: str = ""
     default_environment: str = "demo"
+    # Background upkeep (see app/maintenance.py). 0 turns the periodic analyzer off.
+    analyze_interval_seconds: int = 0
+    analysis_window_seconds: int = 900
+    auto_investigate: bool = False  # read-only diagnostics only; never proposes or executes actions
+    retention_days: int = 7  # events older than this are purged unless an incident cites them
+    purge_interval_seconds: int = 3600
+    # An approval is only good for this long: conditions may have changed since it was given.
+    approval_ttl_seconds: int = 1800
 
 
 def get_settings() -> Settings:

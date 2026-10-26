@@ -5,7 +5,7 @@
 
 const $ = (sel) => document.querySelector(sel);
 const state = { token: sessionStorage.getItem("sentinel_token") || "", actor: localStorage.getItem("sentinel_actor") || "",
-                selected: null, incidents: [], timer: null, signature: "", contracts: [] };
+                selected: null, incidents: [], timer: null, signature: "", contracts: [], prevention: [] };
 
 function h(tag, props, ...kids) {
   const el = document.createElement(tag);
@@ -148,6 +148,48 @@ function recoverySection(inc) {
     state.contracts.length ? state.contracts.map(contractCard) : h("p", { class: "note" }, "No recovery contracts.")];
 }
 
+const ATTRIBUTION_TEXT = {
+  single_cause: "One cause explains every symptom.",
+  multi_cause: "Different symptoms have different causes.",
+  partial: "Some symptoms are explained; others are not.",
+  unexplained: "No symptom has a clearly supported cause.",
+};
+
+function attributionSection(inc) {
+  const a = inc.summary.attribution;
+  if (!a) return null;
+  return [h("h3", {}, "Attribution by symptom"),
+    h("p", {}, badge(a, a === "single_cause" || a === "multi_cause" ? "good" : "warn"), ATTRIBUTION_TEXT[a] || ""),
+    h("ul", { class: "evidence" }, (inc.summary.symptoms || []).map((x) => h("li", {},
+      `${x.route} (${x.kind}): `, x.cause ? badge(x.cause, "good") : badge("unexplained", "warn"),
+      h("span", { class: "note" }, ` best candidate ${x.top_candidate} (score ${x.top_score}), runner-up ${x.runner_up} (${x.runner_up_score})`))))];
+}
+
+function artifactCard(a) {
+  const failed = a.checks.filter((c) => !c.passed);
+  const buttons = [];
+  if (a.review_status === "proposed") {
+    buttons.push(
+      h("button", { type: "button", disabled: a.checks_passed ? null : "disabled", onclick: () => run("Approve artifact", async () => { requireActor(); await api(`/api/v1/prevention-artifacts/${a.id}/review`, { method: "POST", actor: true, body: { decision: "approve" } }); }) }, "Approve"),
+      h("button", { type: "button", class: "danger", onclick: () => run("Reject artifact", async () => { requireActor(); await api(`/api/v1/prevention-artifacts/${a.id}/review`, { method: "POST", actor: true, body: { decision: "reject" } }); }) }, "Reject"));
+  }
+  return h("article", { class: "card" },
+    h("div", { class: "row" }, h("strong", {}, a.title), badge(a.type, "neutral"), badge(a.review_status, a.review_status === "approved" ? "good" : a.review_status === "rejected" ? "bad" : "warn"),
+      badge(a.checks_passed ? "checks passed" : "checks failed", a.checks_passed ? "good" : "bad")),
+    failed.length ? h("p", { class: "note" }, "Failed: " + failed.map((c) => `${c.name} ${c.detail}`).join("; ")) : null,
+    h("div", { class: "note" }, `Linked to ${a.evidence_ids.length} evidence entr${a.evidence_ids.length === 1 ? "y" : "ies"} and contract ${a.contract_id}.${a.reviewed_by ? " Reviewed by " + a.reviewed_by + "." : ""}`),
+    h("details", {}, h("summary", {}, "Show generated text (untrusted until a person has read it)"), h("pre", { class: "artifact" }, a.content)),
+    h("div", { class: "row" }, buttons));
+}
+
+function preventionSection(inc) {
+  const generate = h("button", { type: "button", class: "secondary", disabled: inc.status === "resolved" ? null : "disabled",
+    onclick: () => run("Generate prevention proposals", async () => { requireActor(); await api(`/api/v1/incidents/${inc.id}/prevention`, { method: "POST", actor: true }); }) }, "Generate prevention proposals");
+  return [h("h3", {}, "Prevention proposals"),
+    h("div", { class: "row" }, generate, h("span", { class: "note" }, inc.status === "resolved" ? "Cause confirmed by a verified recovery. Nothing here is run or merged automatically." : "Available once a recovery has been verified.")),
+    state.prevention.length ? state.prevention.map(artifactCard) : null];
+}
+
 function renderDetail() {
   const el = $("#detail");
   const inc = state.incidents.find((i) => i.id === state.selected);
@@ -165,8 +207,10 @@ function renderDetail() {
     inc.summary.unaffected_routes && inc.summary.unaffected_routes.length ? h("p", { class: "note" }, `Unaffected: ${inc.summary.unaffected_routes.join(", ")}`) : null,
     h("h3", {}, "Hypotheses (ranked)"),
     inc.hypotheses.map((x) => hypothesisCard(x, inc)),
+    attributionSection(inc),
     diagnosticsSection(inc),
-    recoverySection(inc)));
+    recoverySection(inc),
+    preventionSection(inc)));
 }
 
 function render() { renderList(); renderDetail(); }
@@ -177,7 +221,8 @@ async function refresh(force) {
     state.incidents = await api("/api/v1/incidents?limit=30");
     if (!state.selected && state.incidents.length) state.selected = state.incidents[0].id;
     state.contracts = state.selected ? await api(`/api/v1/recovery-contracts?incident_id=${encodeURIComponent(state.selected)}`) : [];
-    const signature = JSON.stringify([state.incidents, state.contracts, state.selected]);
+    state.prevention = state.selected ? await api(`/api/v1/incidents/${encodeURIComponent(state.selected)}/prevention`) : [];
+    const signature = JSON.stringify([state.incidents, state.contracts, state.prevention, state.selected]);
     if (force || signature !== state.signature) { state.signature = signature; render(); }
   } catch (err) {
     setStatus(`Refresh failed: ${err.message}`, true);

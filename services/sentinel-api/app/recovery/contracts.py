@@ -177,7 +177,8 @@ def approve(session: Session, tenant_id: str, contract_id: str, reviewer: str, d
     return row
 
 
-def execute(sessions: sessionmaker, tenant_id: str, contract_id: str, actor: str, executor: Executor) -> str:
+def execute(sessions: sessionmaker, tenant_id: str, contract_id: str, actor: str, executor: Executor,
+            approval_ttl_seconds: int = 1800) -> str:
     """Two short transactions around the executor call, so no DB lock is held during the action."""
     with sessions.begin() as s:
         row = _get(s, tenant_id, contract_id)
@@ -186,6 +187,12 @@ def execute(sessions: sessionmaker, tenant_id: str, contract_id: str, actor: str
         inc = s.get(IncidentRow, row.incident_id)
         if inc is None or inc.status != "open":
             raise ContractError("precondition_failed", 409, {"check": "incident_open"})
+        approved_at = s.scalar(select(TransitionRow.at).where(TransitionRow.contract_id == row.id,
+                                                              TransitionRow.to_state == "READY_FOR_ACTION")
+                               .order_by(TransitionRow.at.desc()))
+        if approved_at is not None and (_now() - _aware(approved_at)).total_seconds() > approval_ttl_seconds:
+            raise ContractError("approval_expired", 409, {"ttl_seconds": approval_ttl_seconds,
+                                                          "hint": "propose a new contract; conditions may have changed"})
         decision = evaluate(row.action_template, row.environment)  # policy is re-checked at execution time
         if not decision.allowed:
             raise ContractError("blocked_by_policy", 403, {"reasons": decision.reasons})

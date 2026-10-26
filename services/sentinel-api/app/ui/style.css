@@ -44,3 +44,4 @@ table { border-collapse: collapse; width: 100%; font-size: .85rem; }
 th, td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid var(--border); }
 .note { font-size: .8rem; color: var(--muted); }
 code { font-family: ui-monospace, monospace; font-size: .85em; }
+pre.artifact { white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: .6rem; max-height: 22rem; overflow: auto; font-size: .8rem; }

@@ -2,6 +2,8 @@ import hmac
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
+import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -12,6 +14,7 @@ from sqlalchemy.dialects import postgresql, sqlite
 
 from .adapters import ADAPTERS
 from .config import Settings, get_settings
+from . import maintenance, prevention
 from .analysis.diagnostics import TESTS, investigate, run_test
 from .analysis.service import analyze
 from .db import DiagnosticRunRow, EventRow, EvidenceRow, HypothesisRow, IncidentRow, make_session_factory
@@ -23,7 +26,16 @@ from .schemas import DiagnosticRequest, DiagnosticRunOut, InvestigateRequest, Ev
 def create_app(settings: Settings | None = None, executor: Executor | None = None) -> FastAPI:
     settings = settings or get_settings()
     sessions = make_session_factory(settings.database_url, settings.auto_create_schema)
-    app = FastAPI(title="SentinelOps API", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        task = None
+        if settings.analyze_interval_seconds > 0:  # off by default; serverless hosts should not enable it
+            task = asyncio.create_task(maintenance.run_forever(sessions, settings))
+        yield
+        if task:
+            task.cancel()
+
+    app = FastAPI(title="SentinelOps API", version="0.1.0", lifespan=lifespan)
 
     def require_token(authorization: Annotated[str | None, Header()] = None) -> None:
         expected = settings.ingest_token
@@ -114,6 +126,13 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
             raise HTTPException(status_code=404, detail="not_found")
         return inc
 
+    @app.post("/api/v1/maintenance/purge", dependencies=[Depends(require_token)])
+    def purge(days: Annotated[int, Query(ge=0, le=3650, description="Delete events older than this; 0 = the configured retention")] = 0) -> dict:
+        keep_days = days or settings.retention_days
+        with sessions.begin() as session:
+            return maintenance.purge_events(session, settings.default_tenant_id,
+                                            datetime.now(timezone.utc) - timedelta(days=keep_days))
+
     @app.post("/api/v1/incidents/{incident_id}/diagnostics", response_model=IncidentOut, dependencies=[Depends(require_token)])
     def run_diagnostic(incident_id: str, body: DiagnosticRequest) -> IncidentOut:
         if body.test_id not in TESTS:  # allow-list: unknown ids are rejected, never interpreted
@@ -163,6 +182,7 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
         executor = (ShopAdminExecutor(settings.shop_admin_url, settings.shop_admin_token)
                     if settings.executor == "shop_admin" else MockExecutor())
     recovery_api.register(app, settings, sessions, require_token, executor)
+    prevention.register(app, settings.default_tenant_id, sessions, require_token)
 
     # Dashboard: static files served same-origin. The CSP forbids inline script and any outside host.
     app.mount("/ui", StaticFiles(directory=Path(__file__).parent / "ui", html=True), name="ui")

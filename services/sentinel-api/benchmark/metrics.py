@@ -32,7 +32,10 @@ def score_run(system: str, s: Scenario, seed: int, r: SystemResult) -> dict:
         "top1_correct": determinable and r.cause in s.truth_causes,
         "multi_cause": len(s.truth_causes) > 1,
         # a system that names a single cause cannot have found every cause of a multi-cause incident
-        "complete_diagnosis": len(s.truth_causes) > 1 and r.cause is not None and {r.cause} >= s.truth_causes,
+        "complete_diagnosis": len(s.truth_causes) > 1 and set(r.causes) >= s.truth_causes,
+        # an incomplete diagnosis that says so is better than one that claims to be whole
+        "incompleteness_acknowledged": len(s.truth_causes) > 1 and not set(r.causes) >= s.truth_causes and r.unexplained > 0,
+        "claims_to_explain_all": len(s.truth_causes) > 1 and not set(r.causes) >= s.truth_causes and r.cause is not None and r.unexplained == 0,
         "false_diagnosis": s.has_fault and r.cause is not None and r.cause not in s.truth_causes,
         "correct_abstention": s.ambiguous and r.detected and r.cause is None,
         "wrongful_abstention": determinable and r.detected and r.cause is None,
@@ -52,6 +55,7 @@ RATES = [
     ("false_alarm_rate", lambda x: x["false_alarm"], lambda x: not x["has_fault"], "incidents raised on healthy traffic"),
     ("top1_accuracy", lambda x: x["top1_correct"], lambda x: x["determinable"], "correct cause named (determinable faults)"),
     ("complete_diagnosis_rate", lambda x: x["complete_diagnosis"], lambda x: x["multi_cause"], "all causes found (multi-cause faults)"),
+    ("incompleteness_acknowledged_rate", lambda x: x["incompleteness_acknowledged"], lambda x: x["multi_cause"] and not x["complete_diagnosis"], "said some symptoms are unexplained (incomplete multi-cause diagnoses)"),
     ("false_diagnosis_rate", lambda x: x["false_diagnosis"], lambda x: x["has_fault"], "a wrong cause named (all faults)"),
     ("correct_abstention_rate", lambda x: x["correct_abstention"], lambda x: x["ambiguous"], "abstained when not determinable"),
     ("wrongful_abstention_rate", lambda x: x["wrongful_abstention"], lambda x: x["determinable"], "abstained when a cause was determinable"),

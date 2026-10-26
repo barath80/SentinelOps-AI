@@ -291,3 +291,18 @@ def test_p95_needs_enough_samples_to_be_judged(env):
     feed(client, start, n=12, offsets=[2 + i * 4.5 for i in range(12)])
     v = verify(client, done["id"], end + timedelta(seconds=1)).json()
     assert v["outcome"] == "inconclusive" and "insufficient_samples: 12 < 20" in v["reason"]
+
+
+def test_stale_approval_expires(tmp_path):
+    ex = MockExecutor()
+    settings = Settings(database_url=f"sqlite:///{tmp_path / 't.db'}", ingest_token="test-token",
+                        max_batch_events=2000, approval_ttl_seconds=0)
+    client = TestClient(create_app(settings, executor=ex))
+    inc = s01_incident(client)
+    c = propose(client, inc).json()
+    client.post(f"{RC}/{c['id']}/approve", json={"decision": "approve"}, headers=BOB)
+    import time
+    time.sleep(0.05)
+    res = client.post(f"{RC}/{c['id']}/execute", headers=BOB)
+    assert res.status_code == 409 and res.json()["error"] == "approval_expired"
+    assert ex.calls == [] and client.get(f"{RC}/{c['id']}", headers=AUTH).json()["state"] == "READY_FOR_ACTION"

@@ -5,7 +5,7 @@ from .scenarios import SCENARIOS
 
 LABELS = {"alert_correlator": "Alert correlator", "llm_only": "LLM only", "sentinel": "SentinelOps (no falsification)",
           "sentinel_falsify": "SentinelOps (+ falsification)"}
-GOOD_LOW = {"false_alarm_rate", "false_diagnosis_rate", "wrongful_abstention_rate", "incorrect_intervention_rate", "false_success_rate"}
+GOOD_LOW = {"claims_to_explain_all", "false_alarm_rate", "false_diagnosis_rate", "wrongful_abstention_rate", "incorrect_intervention_rate", "false_success_rate"}
 
 
 def _cell(r: dict) -> str:
@@ -69,8 +69,9 @@ def render(result: dict) -> str:
                          (f" (wrong action x{c['incorrect_intervention']})" if c["incorrect_intervention"] else "") if c else "-")
         lines.append(f"| **{scn.id}** {scn.name} | {truth} | " + " | ".join(cells) + " |")
     lines += ["", "## Known gaps", "",
-              "- **S10 (two faults):** no system reports a multi-cause incident; the `complete_diagnosis_rate` row shows this. "
-              "Naming one of the two causes counts as a correct top-1 but an incomplete diagnosis.",
+              "- **S10 (two faults):** see `complete_diagnosis_rate` and `incompleteness_acknowledged_rate`. Naming one of the two "
+              "causes counts as a correct top-1 but an incomplete diagnosis; saying which symptom is unexplained is credited separately. "
+              "In S10 the products symptom stays unexplained (attribution `partial`): the release label is app-wide, so the data cannot separate the two faults. Unit tests show the engine does report `multi_cause` when the evidence separates them.",
               "- **Not modelled:** S02, S04, S06, S07 (no database/cache/CPU signals in the demo shop), S11 (clock skew); "
               "S12 (unsafe action) is covered by policy tests, not here.",
               "- **LLM-only baseline** runs only when `ANTHROPIC_API_KEY` is set; without it the comparison to an LLM is absent, "

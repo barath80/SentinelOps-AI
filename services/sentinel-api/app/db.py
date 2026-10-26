@@ -170,6 +170,28 @@ class VerificationRow(Base):
     predicates: Mapped[list] = mapped_column(JSON)
 
 
+class PreventionArtifactRow(Base):
+    """A proposed regression test / alert rule / runbook change. Text only: never executed or merged."""
+
+    __tablename__ = "prevention_artifacts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    incident_id: Mapped[str] = mapped_column(ForeignKey("incidents.id", ondelete="CASCADE"), index=True)
+    contract_id: Mapped[str] = mapped_column(String(36))
+    artifact_type: Mapped[str] = mapped_column(String(24))  # regression_test|alert_rule|runbook_amendment|monitoring_gap
+    title: Mapped[str] = mapped_column(String(200))
+    language: Mapped[str] = mapped_column(String(12))
+    content: Mapped[str] = mapped_column(Text)
+    evidence_ids: Mapped[list] = mapped_column(JSON)
+    source_event_ids: Mapped[list] = mapped_column(JSON)
+    review_status: Mapped[str] = mapped_column(String(10), default="proposed")  # proposed|approved|rejected
+    reviewed_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checks: Mapped[list] = mapped_column(JSON)
+    checks_passed: Mapped[bool] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 def make_session_factory(url: str, create_schema: bool = True) -> sessionmaker:
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
     engine = create_engine(url, connect_args=connect_args, pool_pre_ping=True)

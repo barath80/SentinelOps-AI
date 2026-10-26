@@ -1,6 +1,6 @@
 # Benchmark results
 
-Generated 2026-10-26T18:09:24.889570+00:00 with Python 3.12.10. 20 seeds x 9 scenarios x 3 systems = 540 runs. Rates are shown as `k/n = rate [Wilson 95% interval]`.
+Generated 2026-10-26T18:39:10.643164+00:00 with Python 3.12.10. 20 seeds x 9 scenarios x 3 systems = 540 runs. Rates are shown as `k/n = rate [Wilson 95% interval]`.
 
 ## Read this first
 
@@ -21,6 +21,7 @@ Generated 2026-10-26T18:09:24.889570+00:00 with Python 3.12.10. 20 seeds x 9 sce
 | **false_alarm_rate**<br><sub>incidents raised on healthy traffic; lower is better</sub> | 0/20 = 0% [0%-16%] | 0/20 = 0% [0%-16%] | 0/20 = 0% [0%-16%] |
 | **top1_accuracy**<br><sub>correct cause named (determinable faults); higher is better</sub> | 60/100 = 60% [50%-69%] | 100/100 = 100% [96%-100%] | 100/100 = 100% [96%-100%] |
 | **complete_diagnosis_rate**<br><sub>all causes found (multi-cause faults); higher is better</sub> | 0/20 = 0% [0%-16%] | 0/20 = 0% [0%-16%] | 0/20 = 0% [0%-16%] |
+| **incompleteness_acknowledged_rate**<br><sub>said some symptoms are unexplained (incomplete multi-cause diagnoses); higher is better</sub> | 0/20 = 0% [0%-16%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] |
 | **false_diagnosis_rate**<br><sub>a wrong cause named (all faults); lower is better</sub> | 20/120 = 17% [11%-24%] | 0/120 = 0% [0%-3%] | 0/120 = 0% [0%-3%] |
 | **correct_abstention_rate**<br><sub>abstained when not determinable; higher is better</sub> | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] |
 | **wrongful_abstention_rate**<br><sub>abstained when a cause was determinable; lower is better</sub> | 20/100 = 20% [13%-29%] | 0/100 = 0% [0%-4%] | 0/100 = 0% [0%-4%] |
@@ -28,7 +29,7 @@ Generated 2026-10-26T18:09:24.889570+00:00 with Python 3.12.10. 20 seeds x 9 sce
 | **false_success_rate**<br><sub>claimed recovery that did not happen (of executed actions); lower is better</sub> | 40/80 = 50% [39%-61%] | 0/100 = 0% [0%-4%] | 0/100 = 0% [0%-4%] |
 | **verified_recovery_rate**<br><sub>recovery truly achieved and correctly claimed; higher is better</sub> | 40/120 = 33% [26%-42%] | 80/120 = 67% [58%-74%] | 80/120 = 67% [58%-74%] |
 | mean diagnostic tests run | 0.0 | 0.0 | 1.1 |
-| mean analysis time (ms) | 19 | 929 | 1073 |
+| mean analysis time (ms) | 22 | 920 | 978 |
 
 ## Falsification probes (P1, P2)
 
@@ -38,6 +39,7 @@ Generated 2026-10-26T18:09:24.889570+00:00 with Python 3.12.10. 20 seeds x 9 sce
 | **false_alarm_rate**<br><sub>incidents raised on healthy traffic; lower is better</sub> | n/a | n/a | n/a |
 | **top1_accuracy**<br><sub>correct cause named (determinable faults); higher is better</sub> | n/a | n/a | n/a |
 | **complete_diagnosis_rate**<br><sub>all causes found (multi-cause faults); higher is better</sub> | n/a | n/a | n/a |
+| **incompleteness_acknowledged_rate**<br><sub>said some symptoms are unexplained (incomplete multi-cause diagnoses); higher is better</sub> | n/a | n/a | n/a |
 | **false_diagnosis_rate**<br><sub>a wrong cause named (all faults); lower is better</sub> | 20/40 = 50% [35%-65%] | 40/40 = 100% [91%-100%] | 0/40 = 0% [0%-9%] |
 | **correct_abstention_rate**<br><sub>abstained when not determinable; higher is better</sub> | 20/40 = 50% [35%-65%] | 0/40 = 0% [0%-9%] | 40/40 = 100% [91%-100%] |
 | **wrongful_abstention_rate**<br><sub>abstained when a cause was determinable; lower is better</sub> | n/a | n/a | n/a |
@@ -45,7 +47,7 @@ Generated 2026-10-26T18:09:24.889570+00:00 with Python 3.12.10. 20 seeds x 9 sce
 | **false_success_rate**<br><sub>claimed recovery that did not happen (of executed actions); lower is better</sub> | 20/20 = 100% [84%-100%] | 0/40 = 0% [0%-9%] | n/a |
 | **verified_recovery_rate**<br><sub>recovery truly achieved and correctly claimed; higher is better</sub> | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] |
 | mean diagnostic tests run | 0.0 | 0.0 | 3.0 |
-| mean analysis time (ms) | 17 | 943 | 987 |
+| mean analysis time (ms) | 18 | 883 | 988 |
 
 ## Answers by scenario
 
@@ -65,6 +67,6 @@ Each cell counts what the system answered across seeds. `abstained` means it det
 
 ## Known gaps
 
-- **S10 (two faults):** no system reports a multi-cause incident; the `complete_diagnosis_rate` row shows this. Naming one of the two causes counts as a correct top-1 but an incomplete diagnosis.
+- **S10 (two faults):** see `complete_diagnosis_rate` and `incompleteness_acknowledged_rate`. Naming one of the two causes counts as a correct top-1 but an incomplete diagnosis; saying which symptom is unexplained is credited separately. In S10 the products symptom stays unexplained (attribution `partial`): the release label is app-wide, so the data cannot separate the two faults. Unit tests show the engine does report `multi_cause` when the evidence separates them.
 - **Not modelled:** S02, S04, S06, S07 (no database/cache/CPU signals in the demo shop), S11 (clock skew); S12 (unsafe action) is covered by policy tests, not here.
 - **LLM-only baseline** runs only when `ANTHROPIC_API_KEY` is set; without it the comparison to an LLM is absent, not assumed.

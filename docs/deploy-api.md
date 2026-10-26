@@ -15,14 +15,14 @@ dependency list in a clean virtualenv, and the container start command run local
 3. **Check it.** `https://<service>.onrender.com/health` returns `{"status":"ok"}`. Open `/ui/`, enter the token and your name.
 4. **Connect the shop.** In the shop's Vercel project set `SENTINEL_INGEST_URL=https://<service>.onrender.com` and
    `SENTINEL_INGEST_TOKEN=<the same secret>`, then redeploy.
-5. **Analyze.** Incidents appear when you press "Analyze now" in the dashboard (or `POST /api/v1/incidents/analyze`). There is no
-   scheduler yet.
+5. **Analyze.** Incidents appear when you press "Analyze now" in the dashboard (or `POST /api/v1/incidents/analyze`). To do it
+   automatically set `SENTINEL_ANALYZE_INTERVAL_SECONDS=60` (not on serverless hosts, which cannot keep a background task alive).
 
 ## Known limits to accept before relying on it
 
 - **Free instances sleep.** The shop gives up on a push after 3 s and drops the events, so telemetry sent while the API is
   waking up is lost. Use a paid instance or a keep-alive if that matters.
-- **No data retention.** The `events` table grows without limit. Add a retention job before leaving it running on a small database.
+- **Retention is on by default (7 days)** but only runs when the periodic job is enabled (`SENTINEL_ANALYZE_INTERVAL_SECONDS` > 0) or when you call `POST /api/v1/maintenance/purge`. Events cited by evidence are kept.
 - **Schema changes are not migrated.** `create_all` only creates missing tables. Changing a column needs a real migration
   (Alembic); until then drop and recreate the SentinelOps tables.
 - **One shared secret, one tenant.** The bearer token grants full access, including approving and executing actions. Actor names

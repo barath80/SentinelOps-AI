@@ -143,3 +143,50 @@ def test_get_incident_detail(client):
     [inc] = run(client, baseline() + recent(500, 1, version="v2", message="unhandled_exception"))
     got = client.get(f"/api/v1/incidents/{inc['id']}", headers=AUTH).json()
     assert got["id"] == inc["id"] and len(got["hypotheses"]) == 4
+
+
+# ---- multi-symptom attribution -----------------------------------------------------------------
+
+def two_fault_events(products_label):
+    """Checkout throws on the new release; the products route is slow. `products_label` is the
+    release label seen on the slow products requests."""
+    events = baseline()
+    for i in range(10):
+        t = NOW - timedelta(seconds=100 - i * 9)
+        events.append(line(t, "/api/checkout", 500, 1, "v2", "unhandled_exception", error="TypeError"))
+        events.append(line(t + timedelta(seconds=1), "/api/products", 200, 1400, products_label))
+        events.append(line(t + timedelta(seconds=2), "/api/cart", 200, 6, products_label))  # healthy third route
+    for i in range(30):  # the cart route also has a baseline
+        events.append(line(NOW - timedelta(seconds=600 - i * 15), "/api/cart", 200, 6))
+    return events
+
+
+def test_two_independent_faults_are_reported_as_multi_cause(client):
+    """Products is slow on the OLD release while checkout fails on the new one: two causes."""
+    [inc] = run(client, two_fault_events("v1"))
+    s = inc["summary"]
+    assert s["attribution"] == "multi_cause"
+    assert s["causes"] == ["release_regression", "slow_dependency"]
+    by_route = {x["route"]: x["cause"] for x in s["symptoms"]}
+    assert by_route == {"/api/checkout": "release_regression", "/api/products": "slow_dependency"}
+
+
+def test_a_symptom_that_cannot_be_attributed_is_reported_unexplained(client):
+    """Slowness appears together with a release change, but nothing separates the two causes."""
+    [inc] = run(client, two_fault_events("v2"))
+    s = inc["summary"]
+    assert s["attribution"] == "partial"
+    assert s["causes"] == ["release_regression"] and s["unexplained_symptoms"] == ["/api/products (latency)"]
+
+
+def test_single_symptom_incidents_are_single_cause(client):
+    [inc] = run(client, baseline() + recent(500, 1, version="v2", message="unhandled_exception"))
+    assert inc["summary"]["attribution"] == "single_cause" and inc["summary"]["causes"] == ["release_regression"]
+
+
+def test_ambiguous_single_symptom_is_unexplained(tmp_path):
+    from app.config import Settings
+    from app.main import create_app
+    c = TestClient(create_app(Settings(database_url=f"sqlite:///{tmp_path / 'a.db'}", ingest_token="test-token", max_batch_events=2000)))
+    [inc] = run(c, baseline() + recent(500, 40))
+    assert inc["summary"]["attribution"] == "unexplained" and inc["summary"]["causes"] == []

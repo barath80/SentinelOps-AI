@@ -110,8 +110,9 @@ def build_hypotheses(c: IncidentCandidate, f: Features) -> list[Hypothesis]:
     ev: list[EvidenceItem] = []
     changed = bool(f.base_versions) and bool(f.bad_versions) and not f.bad_versions <= f.base_versions
     if changed:
-        ev.append(EvidenceItem("supports", 0.8,
-            f"Release label changed from {sorted(f.base_versions)} (baseline) to {sorted(f.bad_versions)} on the failing requests.",
+        # Release defects usually surface as errors, so a label change is weaker evidence for pure slowness.
+        ev.append(EvidenceItem("supports", 0.4 if f.latency_only else 0.8,
+            f"Release label changed from {sorted(f.base_versions)} (baseline) to {sorted(f.bad_versions)} on the affected requests.",
             _ids(f.bad), _fp("version-change", where, window)))
     elif f.base_versions and f.bad_versions:
         ev.append(EvidenceItem("contradicts", 0.7,

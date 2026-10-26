@@ -71,3 +71,14 @@ It is plain HTML and JavaScript served by the API (no build step, same origin). 
 ## Deployment
 
 See [docs/deploy-api.md](../../docs/deploy-api.md). Use a Postgres `SENTINEL_DATABASE_URL`; run `python -m app.migrate` once if you set `SENTINEL_AUTO_CREATE_SCHEMA=false`.
+
+## Multi-symptom attribution, upkeep and prevention (Phase 7)
+
+**Attribution by symptom** (`app/analysis/attribution.py`): besides the incident-level ranking, each anomaly (route + kind) is ranked on its own and reported in `summary.attribution` as `single_cause`, `multi_cause`, `partial` (some symptoms explained, others listed in `unexplained_symptoms`), or `unexplained`. A release-label change counts for less (0.4 instead of 0.8) when the symptom is slowness without errors, because release defects usually show up as errors. Attribution is computed at analysis time and is not re-run after diagnostics.
+
+**Upkeep** (`app/maintenance.py`), all off or conservative by default:
+- `SENTINEL_ANALYZE_INTERVAL_SECONDS` (default 0 = off) runs analysis periodically; `SENTINEL_AUTO_INVESTIGATE=true` also runs the read-only diagnostics once per open incident. The scheduler never proposes, approves or executes an action. A failed pass is logged and the loop continues.
+- Retention: `SENTINEL_RETENTION_DAYS` (default 7) and `POST /api/v1/maintenance/purge?days=N` delete old events, **except** events cited by stored evidence or diagnostic runs, so ledger links keep resolving.
+- Approvals expire after `SENTINEL_APPROVAL_TTL_SECONDS` (default 1800); executing a stale approval returns `approval_expired`.
+
+**Prevention compiler** (`app/prevention.py`): `POST /api/v1/incidents/{id}/prevention` (needs `X-Actor`) works only once a cause is confirmed, meaning the incident is resolved by a contract whose verification passed and whose action was the recommended fix for the leading cause. It stores a regression test, an alert rule, a runbook amendment, and one follow-up per missing-evidence item. Each links to the ledger evidence and source events, passes static checks (parses, allow-listed imports, no dynamic code or file access, no secrets, targets `SHOP_URL` rather than a hard-coded host), starts as `proposed`, and changes only via `POST /api/v1/prevention-artifacts/{id}/review`. Nothing is executed, deployed or merged by the system. A generated regression test was run against the real shop: it passes when healthy and fails (500) with the bad release active.

@@ -87,7 +87,7 @@ def register(app: FastAPI, settings: Settings, sessions, require_token, executor
     @app.post("/api/v1/recovery-contracts/{contract_id}/execute", dependencies=deps)
     def execute(contract_id: str, who: Annotated[str, Depends(actor)]):
         try:
-            contracts.execute(sessions, tenant, contract_id, who, executor)
+            contracts.execute(sessions, tenant, contract_id, who, executor, settings.approval_ttl_seconds)
             with sessions() as s:
                 return contracts.get_contract(s, tenant, contract_id)
         except ContractError as exc:

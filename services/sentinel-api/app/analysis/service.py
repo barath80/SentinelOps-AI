@@ -8,6 +8,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..db import DiagnosticRunRow, EvidenceRow, EventRow, HypothesisRow, IncidentRow
+from .attribution import attribute
 from .diagnostics import reapply
 from .detect import DetectionConfig, IncidentCandidate, detect, group, samples_from_rows
 from .hypotheses import SCORE_VERSION, build_hypotheses, compute_features, rank
@@ -45,6 +46,7 @@ def analyze(session: Session, tenant_id: str, as_of: datetime, window_seconds: i
 
     ids: list[str] = []
     for cand in group(detect(samples, as_of, cfg), as_of, cfg):
+        timeouts_for_features = timeouts
         feats = compute_features(cand, samples, timeouts)
         ranked, assessment = rank(build_hypotheses(cand, feats))
         incident = _find_open(session, tenant_id, cand, cfg)
@@ -73,6 +75,7 @@ def analyze(session: Session, tenant_id: str, as_of: datetime, window_seconds: i
                 "recent_p95_ms": a.recent_p95_ms, "baseline_p95_ms": a.baseline_p95_ms,
             } for a in cand.anomalies],
             "unaffected_routes": feats.unaffected_routes,
+            **attribute(cand, samples, timeouts_for_features),
         }
         session.flush()
         for h in ranked:

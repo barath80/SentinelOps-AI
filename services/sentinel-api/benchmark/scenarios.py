@@ -112,6 +112,10 @@ def _version(mode: str, i: int, base: str) -> str:
     return ("v2" if i % 2 else "v1") if mode == "exception_mixed" else base
 
 
+def _cart(rng: random.Random, t: datetime, rid: str, version: str = "v1") -> dict:
+    return _line(t, "/api/cart", 200, 5 + rng.random() * 4, version, request_id=rid)
+
+
 def make_events(s: Scenario, seed: int) -> list[dict]:
     """The telemetry all systems receive: healthy baseline, then the fault in the last ~100 s."""
     rng = random.Random(f"{s.id}-{seed}")
@@ -121,12 +125,14 @@ def make_events(s: Scenario, seed: int) -> list[dict]:
         t = NOW - timedelta(seconds=600 - i * (470 / n_base))
         out += _checkout(rng, t, "healthy", "v1", f"b{i}c")
         out.append(_products(rng, t + timedelta(seconds=1), "healthy", f"b{i}p"))
+        out.append(_cart(rng, t + timedelta(seconds=2), f"b{i}k"))
     n_recent = rng.randint(9, 16)
     for i in range(n_recent):
         t = NOW - timedelta(seconds=100 - i * (92 / n_recent))
         ver = _version(s.checkout_mode, i, s.version_after)
         out += _checkout(rng, t, s.checkout_mode, ver, f"r{i}c")
         out.append(_products(rng, t + timedelta(seconds=1), s.products_mode, f"r{i}p", ver))
+        out.append(_cart(rng, t + timedelta(seconds=2), f"r{i}k", ver))  # the cart route is never faulty
     return out
 
 
@@ -155,6 +161,7 @@ def make_post_action_events(s: Scenario, seed: int, action: str | None) -> list[
             ver = "v1"  # the rollback removes the new release, but the old one keeps failing
         out += _checkout(rng, t, c_mode, ver, f"a{i}c")
         out.append(_products(rng, t + timedelta(milliseconds=300), p_mode, f"a{i}p", ver))
+        out.append(_cart(rng, t + timedelta(milliseconds=600), f"a{i}k", ver))
     return out
 
 

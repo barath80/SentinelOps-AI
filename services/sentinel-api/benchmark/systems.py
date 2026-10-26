@@ -39,6 +39,8 @@ CAUSES = ["release_regression", "payment_provider_timeout", "slow_dependency", "
 class SystemResult:
     detected: bool = False
     cause: str | None = None  # None = abstained (or nothing detected)
+    causes: list = field(default_factory=list)  # every cause the system claims (multi-cause aware)
+    unexplained: int = 0  # symptoms the system says it could not attribute
     action: str | None = None
     claims_success: bool | None = None  # None = made no claim (e.g. verification inconclusive/pending)
     verification: str | None = None
@@ -98,6 +100,7 @@ def alert_correlator(events: list[dict], post_events_for) -> SystemResult:
         res.action = _safe_action(res.cause)
         if res.action:
             res.claims_success = True  # no verification step: executing the action is treated as the fix
+    res.causes = [res.cause] if res.cause else []
     res.elapsed_ms = int((time.perf_counter() - t0) * 1000)
     return res
 
@@ -152,6 +155,7 @@ def llm_only(events: list[dict], post_events_for, *, transport=None) -> SystemRe
                        llm_tokens=usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
     res.action = _safe_action(cause)
     res.claims_success = True if res.action else None  # no verification step
+    res.causes = [cause] if cause else []
     res.elapsed_ms = int((time.perf_counter() - t0) * 1000)
     return res
 
@@ -185,6 +189,9 @@ def sentinel(events: list[dict], post_events_for, *, falsify: bool) -> SystemRes
                                    .order_by(HypothesisRow.score.desc())).first()
                 if inc.assessment == "leading_hypothesis" and leader and leader.status == "leading":
                     res.cause = leader.cause_key
+                res.causes = list(inc.summary.get("causes", []))
+                res.unexplained = len(inc.summary.get("unexplained_symptoms", []))
+                res.notes["attribution"] = inc.summary.get("attribution")
                 res.notes["assessment"] = inc.assessment
                 res.action = _safe_action(res.cause)
                 if res.action:
