@@ -24,5 +24,5 @@ Synthetic demo shop used as a workload for SentinelOps AI. Next.js (App Router),
 
 ## Known limits
 
-- Orders are stored in process memory, so on Vercel they can disappear between invocations. A durable database replaces `src/lib/orders.ts`.
+- Orders live in Neon Postgres (`DATABASE_URL` in `.env.local`; create the table with `npm run db:migrate`). The fault-scenario override is still per server instance.
 - Unknown product pages return HTTP 200 with a not-found body because the page streams inside Suspense.

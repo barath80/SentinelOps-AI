@@ -1,3 +1,4 @@
+import { neon } from "@neondatabase/serverless";
 import type { DetailedLine } from "./cart";
 
 export type Order = {
@@ -9,35 +10,60 @@ export type Order = {
   authorizationId: string;
 };
 
-// Phase 1 storage is process memory: fine locally, best-effort on serverless
-// (instances are recycled). A durable store replaces this behind the same functions.
-const byId = new Map<string, Order>();
-const byKey = new Map<string, string>();
+type Row = {
+  id: string;
+  idempotency_key: string;
+  created_at: string | Date;
+  total_cents: number;
+  lines: Order["lines"];
+  authorization_id: string;
+};
 
-export function findByKey(key: string): Order | undefined {
-  const id = byKey.get(key);
-  return id ? byId.get(id) : undefined;
+// HTTP-based driver: no connection pool to manage in serverless functions.
+function db() {
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error("DATABASE_URL is not set");
+  return neon(url);
 }
 
-export function getOrder(id: string): Order | undefined {
-  return byId.get(id);
+function toOrder(r: Row): Order {
+  return {
+    id: r.id,
+    idempotencyKey: r.idempotency_key,
+    createdAt: new Date(r.created_at).toISOString(),
+    totalCents: r.total_cents,
+    lines: r.lines,
+    authorizationId: r.authorization_id,
+  };
 }
 
-export function saveOrder(
+export async function findByKey(key: string): Promise<Order | undefined> {
+  const rows = (await db()`SELECT * FROM orders WHERE idempotency_key = ${key}`) as Row[];
+  return rows[0] && toOrder(rows[0]);
+}
+
+export async function getOrder(id: string): Promise<Order | undefined> {
+  const rows = (await db()`SELECT * FROM orders WHERE id = ${id}`) as Row[];
+  return rows[0] && toOrder(rows[0]);
+}
+
+// Atomic on the idempotency key: two concurrent requests with the same key create one order.
+// Returns the existing order (created=false) when the key was already used.
+export async function saveOrder(
   idempotencyKey: string,
   lines: DetailedLine[],
   totalCents: number,
   authorizationId: string,
-): Order {
-  const order: Order = {
-    id: `ord_${crypto.randomUUID().slice(0, 8)}`,
-    idempotencyKey,
-    createdAt: new Date().toISOString(),
-    totalCents,
-    lines: lines.map((l) => ({ id: l.product.id, name: l.product.name, qty: l.qty, lineCents: l.lineCents })),
-    authorizationId,
-  };
-  byId.set(order.id, order);
-  byKey.set(idempotencyKey, order.id);
-  return order;
+): Promise<{ order: Order; created: boolean }> {
+  const id = `ord_${crypto.randomUUID().slice(0, 8)}`;
+  const summary = lines.map((l) => ({ id: l.product.id, name: l.product.name, qty: l.qty, lineCents: l.lineCents }));
+  const inserted = (await db()`
+    INSERT INTO orders (id, idempotency_key, total_cents, lines, authorization_id)
+    VALUES (${id}, ${idempotencyKey}, ${totalCents}, ${JSON.stringify(summary)}::jsonb, ${authorizationId})
+    ON CONFLICT (idempotency_key) DO NOTHING
+    RETURNING *`) as Row[];
+  if (inserted[0]) return { order: toOrder(inserted[0]), created: true };
+  const existing = await findByKey(idempotencyKey);
+  if (!existing) throw new Error("order insert conflicted but no existing order found");
+  return { order: existing, created: false };
 }

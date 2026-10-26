@@ -17,7 +17,7 @@ export const POST = instrument("/api/checkout", async (req, _ctx, requestId) => 
   if (scenario === "S01_bad_deployment") throw new InjectedFault("TypeError: cannot read properties of undefined (reading 'total')");
   if (scenario === "S03_slow_query") await sleep(1500);
 
-  const existing = findByKey(key);
+  const existing = await findByKey(key);
   if (existing) return Response.json({ order: existing, replayed: true });
 
   const { lines, totalCents } = detail(await readCart());
@@ -38,8 +38,9 @@ export const POST = instrument("/api/checkout", async (req, _ctx, requestId) => 
     return Response.json({ error: "payment_declined" }, { status: 402 });
   }
 
-  const order = saveOrder(key, lines, totalCents, payment.authorizationId);
+  const { order, created } = await saveOrder(key, lines, totalCents, payment.authorizationId);
   await writeCart([]);
+  if (!created) return Response.json({ order, replayed: true });
   log("info", "order_created", { request_id: requestId, order_id: order.id, total_cents: totalCents });
   return Response.json({ order, replayed: false }, { status: 201 });
 });

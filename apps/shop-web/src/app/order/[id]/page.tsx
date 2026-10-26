@@ -13,7 +13,7 @@ export default function OrderPage({ params }: PageProps<"/order/[id]">) {
 
 async function Order({ params }: Pick<PageProps<"/order/[id]">, "params">) {
   const { id } = await params;
-  const order = getOrder(id);
+  const order = await getOrder(id);
   if (!order) notFound();
   return (
     <div className="space-y-3">
