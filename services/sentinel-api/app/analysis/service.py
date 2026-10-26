@@ -7,7 +7,8 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from ..db import EvidenceRow, EventRow, HypothesisRow, IncidentRow
+from ..db import DiagnosticRunRow, EvidenceRow, EventRow, HypothesisRow, IncidentRow
+from .diagnostics import reapply
 from .detect import DetectionConfig, IncidentCandidate, detect, group, samples_from_rows
 from .hypotheses import SCORE_VERSION, build_hypotheses, compute_features, rank
 
@@ -47,6 +48,12 @@ def analyze(session: Session, tenant_id: str, as_of: datetime, window_seconds: i
         feats = compute_features(cand, samples, timeouts)
         ranked, assessment = rank(build_hypotheses(cand, feats))
         incident = _find_open(session, tenant_id, cand, cfg)
+        prior_tests: list[str] = []
+        history: dict[str, list] = {}
+        if incident is not None:  # keep what an earlier investigation learned across re-analysis
+            prior_tests = list(session.scalars(select(DiagnosticRunRow.test_id).where(DiagnosticRunRow.incident_id == incident.id)))
+            history = {h.cause_key: list(h.score_history or []) for h in session.scalars(
+                select(HypothesisRow).where(HypothesisRow.incident_id == incident.id))}
         if incident is None:
             incident = IncidentRow(id=str(uuid.uuid4()), tenant_id=tenant_id, status="open")
             session.add(incident)
@@ -72,7 +79,8 @@ def analyze(session: Session, tenant_id: str, as_of: datetime, window_seconds: i
             hid = str(uuid.uuid4())
             session.add(HypothesisRow(id=hid, incident_id=incident.id, cause_key=h.cause_key, title=h.title,
                                       score=h.score, score_version=SCORE_VERSION, status=h.status,
-                                      next_test_id=h.next_test_id, breakdown=h.breakdown))
+                                      next_test_id=h.next_test_id, breakdown=h.breakdown,
+                                      score_history=history.get(h.cause_key, [])))
             session.flush()
             for e in h.evidence:
                 # Ledger rule: every cited source must be a stored event of this tenant.
@@ -80,6 +88,9 @@ def analyze(session: Session, tenant_id: str, as_of: datetime, window_seconds: i
                 session.add(EvidenceRow(id=str(uuid.uuid4()), incident_id=incident.id, hypothesis_id=hid,
                                         relation=e.relation, strength=e.strength, explanation=e.explanation,
                                         source_refs=refs, query_fingerprint=e.query_fingerprint, created_by=CREATED_BY))
+        session.flush()
+        if prior_tests:
+            reapply(session, incident, prior_tests, cfg)
         ids.append(incident.id)
     return ids
 

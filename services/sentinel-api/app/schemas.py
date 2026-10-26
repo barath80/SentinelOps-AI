@@ -70,7 +70,28 @@ class HypothesisOut(BaseModel):
     status: str
     next_test_id: str
     breakdown: dict[str, Any]
+    score_history: list[dict[str, Any]] = Field(default_factory=list)
     evidence: list[EvidenceOut] = Field(default_factory=list)
+
+
+class DiagnosticRunOut(BaseModel):
+    id: str
+    test_id: str
+    hypothesis_key: str
+    outcome: str
+    explanation: str
+    details: dict[str, Any]
+    source_refs: list[str]
+    duration_ms: int
+    created_at: datetime
+
+
+class DiagnosticRequest(BaseModel):
+    test_id: str
+
+
+class InvestigateRequest(BaseModel):
+    budget: int = Field(default=3, ge=1, le=6)
 
 
 class IncidentOut(BaseModel):
@@ -84,3 +105,4 @@ class IncidentOut(BaseModel):
     routes: list[str]
     summary: dict[str, Any]
     hypotheses: list[HypothesisOut] = Field(default_factory=list)
+    diagnostic_runs: list[DiagnosticRunOut] = Field(default_factory=list)

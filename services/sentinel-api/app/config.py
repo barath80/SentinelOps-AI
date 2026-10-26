@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     max_batch_events: int = 500
     max_body_bytes: int = 1_000_000
     max_future_skew_seconds: int = 300
+    # Recovery actions: "mock" records the call only; "shop_admin" drives the demo shop's fault toggle.
+    executor: str = "mock"
+    shop_admin_url: str = ""
+    shop_admin_token: str = ""
+    default_environment: str = "demo"
 
 
 def get_settings() -> Settings:

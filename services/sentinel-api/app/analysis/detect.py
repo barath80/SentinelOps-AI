@@ -24,6 +24,7 @@ class Sample:
     version: str | None
     message: str
     error: str | None = None
+    request_id: str | None = None
 
     @property
     def is_error(self) -> bool:
@@ -102,6 +103,7 @@ def samples_from_rows(rows) -> list[Sample]:
                 version=a.get("version"),
                 message=a["message"],
                 error=a.get("error"),
+                request_id=r.request_id,
             )
         )
     return sorted(out, key=lambda s: s.time)

@@ -9,12 +9,15 @@ from sqlalchemy.dialects import postgresql, sqlite
 
 from .adapters import ADAPTERS
 from .config import Settings, get_settings
+from .analysis.diagnostics import TESTS, investigate, run_test
 from .analysis.service import analyze
-from .db import EventRow, EvidenceRow, HypothesisRow, IncidentRow, make_session_factory
-from .schemas import EventOut, EvidenceOut, HypothesisOut, IncidentOut, IngestRequest, IngestResult
+from .db import DiagnosticRunRow, EventRow, EvidenceRow, HypothesisRow, IncidentRow, make_session_factory
+from .recovery import api as recovery_api
+from .recovery.executors import Executor, MockExecutor, ShopAdminExecutor
+from .schemas import DiagnosticRequest, DiagnosticRunOut, InvestigateRequest, EventOut, EvidenceOut, HypothesisOut, IncidentOut, IngestRequest, IngestResult
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, executor: Executor | None = None) -> FastAPI:
     settings = settings or get_settings()
     sessions = make_session_factory(settings.database_url)
     app = FastAPI(title="SentinelOps API", version="0.1.0")
@@ -98,7 +101,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ho = HypothesisOut.model_validate(h, from_attributes=True)
             ho.evidence = [EvidenceOut.model_validate(e, from_attributes=True) for e in ev if e.hypothesis_id == h.id]
             out.hypotheses.append(ho)
+        for d in session.scalars(select(DiagnosticRunRow).where(DiagnosticRunRow.incident_id == inc.id).order_by(DiagnosticRunRow.created_at)):
+            out.diagnostic_runs.append(DiagnosticRunOut.model_validate(d, from_attributes=True))
         return out
+
+    def own_incident(session, incident_id: str) -> IncidentRow:
+        inc = session.get(IncidentRow, incident_id)
+        if inc is None or inc.tenant_id != settings.default_tenant_id:
+            raise HTTPException(status_code=404, detail="not_found")
+        return inc
+
+    @app.post("/api/v1/incidents/{incident_id}/diagnostics", response_model=IncidentOut, dependencies=[Depends(require_token)])
+    def run_diagnostic(incident_id: str, body: DiagnosticRequest) -> IncidentOut:
+        if body.test_id not in TESTS:  # allow-list: unknown ids are rejected, never interpreted
+            raise HTTPException(status_code=400, detail=f"unknown_test: {body.test_id}")
+        with sessions.begin() as session:
+            inc = own_incident(session, incident_id)
+            run_test(session, inc, body.test_id)
+            return load_incident(session, inc)
+
+    @app.post("/api/v1/incidents/{incident_id}/investigate", dependencies=[Depends(require_token)])
+    def run_investigation(incident_id: str, body: InvestigateRequest | None = None) -> dict:
+        with sessions.begin() as session:
+            inc = own_incident(session, incident_id)
+            report = investigate(session, inc, (body or InvestigateRequest()).budget)
+            return {"report": report, "incident": load_incident(session, inc).model_dump(mode="json")}
 
     @app.post("/api/v1/incidents/analyze", response_model=list[IncidentOut], dependencies=[Depends(require_token)])
     def run_analysis(
@@ -129,6 +156,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(status_code=404, detail="not_found")
             return load_incident(session, inc)
 
+    if executor is None:
+        executor = (ShopAdminExecutor(settings.shop_admin_url, settings.shop_admin_token)
+                    if settings.executor == "shop_admin" else MockExecutor())
+    recovery_api.register(app, settings, sessions, require_token, executor)
     return app
 
 

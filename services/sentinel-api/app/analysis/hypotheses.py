@@ -16,6 +16,7 @@ SCORE_VERSION = "score-v1"
 W_SUPPORT, W_TEMPORAL, W_DEPENDENCY, W_CONTRA, W_MISSING = 1.0, 0.5, 0.3, 1.2, 0.5
 LEADING_MIN_SCORE = 1.0
 LEADING_MIN_GAP = 0.5
+FALSIFY_MIN_STRENGTH = 0.8  # diagnostics use >= 0.8 only for direct contradictions
 
 
 @dataclass
@@ -25,6 +26,7 @@ class EvidenceItem:
     explanation: str
     source_refs: list[str] = field(default_factory=list)
     query_fingerprint: str = ""
+    source: str = "rule"  # "rule" or "diagnostic:<test_id>"
 
 
 @dataclass
@@ -36,6 +38,7 @@ class Hypothesis:
     dependency: float
     next_test_id: str
     score: float = 0.0
+    falsified: bool = False
     status: str = "unlikely"
     breakdown: dict = field(default_factory=dict)
 
@@ -200,18 +203,28 @@ def rank(hypotheses: list[Hypothesis]) -> tuple[list[Hypothesis], str]:
         h.score = round(W_SUPPORT * support + W_TEMPORAL * temporal + W_DEPENDENCY * dependency
                         - W_CONTRA * contra - W_MISSING * missing, 3)
         h.breakdown = {"supporting": support, "temporal": temporal, "dependency": dependency,
+                       "raw_temporal": h.temporal, "raw_dependency": h.dependency,
                        "contradicting": contra, "missing_penalty": missing, "version": SCORE_VERSION}
-    ranked = sorted(hypotheses, key=lambda h: h.score, reverse=True)
-    top = ranked[0]
-    gap = top.score - ranked[1].score if len(ranked) > 1 else top.score
-    if top.score >= LEADING_MIN_SCORE and gap >= LEADING_MIN_GAP:
-        assessment = "leading_hypothesis"
-        top.status = "leading"
+    # A diagnostic that directly contradicts a hypothesis (strength >= 0.8) falsifies it:
+    # it can no longer lead, whatever the rest of its evidence says.
+    for h in hypotheses:
+        h.falsified = any(e.relation == "contradicts" and e.source.startswith("diagnostic") and e.strength >= FALSIFY_MIN_STRENGTH
+                          for e in h.evidence)
+    ranked = sorted(hypotheses, key=lambda h: (not h.falsified, h.score), reverse=True)
+    live = [h for h in ranked if not h.falsified]
+    top = live[0] if live else None
+    gap = (top.score - live[1].score if len(live) > 1 else top.score) if top else 0.0
+    if top and top.score >= LEADING_MIN_SCORE and gap >= LEADING_MIN_GAP:
+        assessment, top.status = "leading_hypothesis", "leading"
     else:
         assessment = "inconclusive"
-        top.status = "uncertain"
-    for h in ranked[1:]:
-        h.status = "alternative" if h.score >= 0 else "unlikely"
-        if assessment == "inconclusive" and gap < LEADING_MIN_GAP and h is ranked[1]:
-            h.status = "uncertain"
+        if top:
+            top.status = "uncertain"
+    for h in ranked:
+        if h.falsified:
+            h.status = "falsified"
+        elif h is not top:
+            h.status = "alternative" if h.score >= 0 else "unlikely"
+            if assessment == "inconclusive" and len(live) > 1 and h is live[1] and gap < LEADING_MIN_GAP:
+                h.status = "uncertain"
     return ranked, assessment
