@@ -23,7 +23,12 @@ export const GET = instrument("/api/health/db", async () => {
       ms: Math.round(performance.now() - started),
     });
   } catch (err) {
+    // Driver errors can quote the connection string (including the password), so never
+    // pass them through: classify known cases and redact anything URL-like from the rest.
     const message = err instanceof Error ? err.message : String(err);
-    return Response.json({ configured: true, ok: false, host, error: message.slice(0, 200) }, { status: 503 });
+    const error = /connection string/i.test(message)
+      ? "invalid_connection_string (value must be exactly postgresql://..., without a NAME= prefix or quotes)"
+      : message.replace(/\S*:\/\/\S*/g, "[redacted]").slice(0, 120);
+    return Response.json({ configured: true, ok: false, host, error }, { status: 503 });
   }
 });
