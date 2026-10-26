@@ -7,6 +7,15 @@ export const GET = instrument("/api/health/db", async () => {
   const url = process.env.DATABASE_URL;
   if (!url) return Response.json({ configured: false, ok: false }, { status: 503 });
 
+  // Shape of the value only (never the value): helps spot paste mistakes.
+  const shape = {
+    length: url.length,
+    starts_with_postgres_scheme: /^postgres(ql)?:\/\//.test(url),
+    has_name_prefix: /^[A-Z_]+=/.test(url),
+    has_quotes: /^["']|["']$/.test(url),
+    has_whitespace: /\s/.test(url),
+  };
+
   let host = "unparseable";
   try {
     host = new URL(url).host;
@@ -29,6 +38,6 @@ export const GET = instrument("/api/health/db", async () => {
     const error = /connection string/i.test(message)
       ? "invalid_connection_string (value must be exactly postgresql://..., without a NAME= prefix or quotes)"
       : message.replace(/\S*:\/\/\S*/g, "[redacted]").slice(0, 120);
-    return Response.json({ configured: true, ok: false, host, error }, { status: 503 });
+    return Response.json({ configured: true, ok: false, host, shape, error }, { status: 503 });
   }
 });
