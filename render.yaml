@@ -1,0 +1,15 @@
+# Render Blueprint for the SentinelOps API. Not yet applied: review before use.
+services:
+  - type: web
+    name: sentinelops-api
+    runtime: docker
+    rootDir: services/sentinel-api
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: SENTINEL_DATABASE_URL   # Postgres connection string (for example Neon)
+        sync: false
+      - key: SENTINEL_INGEST_TOKEN   # long random secret; the shop and the dashboard use it
+        sync: false
+      - key: SENTINEL_EXECUTOR
+        value: mock

@@ -57,3 +57,17 @@ Flow: `POST /api/v1/recovery-contracts` (propose) -> `/{id}/approve` -> `/{id}/e
 - **SLO targets**: error rate <= 1%; p95 <= max(500 ms, 1.5 x the route's pre-incident p95). The basis is stored in the contract (`slo_basis`). A fixed 500 ms was unreachable on the demo setup (checkout writes to a remote database, healthy p95 about 550 ms), so the target is anchored to the measured baseline. A baseline with outliers (for example one cold start in a small sample) gives a looser target, so the basis is shown and should be reviewed at approval.
 - **Executors**: `mock` (default, records the call only) and `shop_admin` (sets the demo shop's fault scenario to `none` via its admin endpoint). Set `SENTINEL_EXECUTOR=shop_admin`, `SENTINEL_SHOP_ADMIN_URL`, `SENTINEL_SHOP_ADMIN_TOKEN`.
 - **Not built yet**: recovery rehearsal in a sandbox copy, rollback of a failed action (`rollback_template` is unset), approval expiry, real authentication of actors, and a production executor. Production mutation is out of scope.
+
+## Dashboard (Phase 6)
+
+Open `/ui/` on the running API. Enter the bearer token and your name (the name is sent as `X-Actor` and recorded in the audit trail), press Connect, then "Analyze now". It lists incidents, ranked hypotheses with their evidence ledger and score history, diagnostic runs, and recovery contracts with approve / execute / verify actions.
+
+It is plain HTML and JavaScript served by the API (no build step, same origin). Telemetry text is untrusted, so the page only ever sets `textContent`; a test fails if `innerHTML`-style APIs appear, and the CSP forbids inline script and outside hosts. The token is kept in `sessionStorage` (cleared when the tab closes).
+
+## Benchmark
+
+`python -m benchmark --seeds 20 --out ../../docs/benchmark-results.md` runs seeded scenarios against a naive alert correlator, an LLM-only baseline (only if `ANTHROPIC_API_KEY` is set), and SentinelOps with and without the falsification loop, on identical telemetry with hidden ground truth. Results and caveats: [docs/benchmark-results.md](../../docs/benchmark-results.md).
+
+## Deployment
+
+See [docs/deploy-api.md](../../docs/deploy-api.md). Use a Postgres `SENTINEL_DATABASE_URL`; run `python -m app.migrate` once if you set `SENTINEL_AUTO_CREATE_SCHEMA=false`.

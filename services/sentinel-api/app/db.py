@@ -80,7 +80,7 @@ class EvidenceRow(Base):
     # Ids of stored events this evidence was computed from; validated to exist before saving.
     source_refs: Mapped[list] = mapped_column(JSON)
     query_fingerprint: Mapped[str] = mapped_column(String(32))
-    created_by: Mapped[str] = mapped_column(String(40))
+    created_by: Mapped[str] = mapped_column(String(80))
 
 
 class DiagnosticRunRow(Base):
@@ -170,8 +170,9 @@ class VerificationRow(Base):
     predicates: Mapped[list] = mapped_column(JSON)
 
 
-def make_session_factory(url: str) -> sessionmaker:
+def make_session_factory(url: str, create_schema: bool = True) -> sessionmaker:
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
     engine = create_engine(url, connect_args=connect_args, pool_pre_ping=True)
-    Base.metadata.create_all(engine)
+    if create_schema:
+        Base.metadata.create_all(engine)
     return sessionmaker(engine, expire_on_commit=False)

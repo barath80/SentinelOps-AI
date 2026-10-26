@@ -22,7 +22,7 @@ from .schemas import DiagnosticRequest, DiagnosticRunOut, InvestigateRequest, Ev
 
 def create_app(settings: Settings | None = None, executor: Executor | None = None) -> FastAPI:
     settings = settings or get_settings()
-    sessions = make_session_factory(settings.database_url)
+    sessions = make_session_factory(settings.database_url, settings.auto_create_schema)
     app = FastAPI(title="SentinelOps API", version="0.1.0")
 
     def require_token(authorization: Annotated[str | None, Header()] = None) -> None:
