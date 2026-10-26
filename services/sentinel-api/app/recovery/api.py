@@ -49,6 +49,17 @@ def register(app: FastAPI, settings: Settings, sessions, require_token, executor
                              "disruptive": a.disruptive} for a in CATALOGUE.values()],
                 "recommended_for_cause": RECOMMENDED_ACTION}
 
+    @app.get("/api/v1/recovery-contracts", dependencies=deps)
+    def list_contracts(incident_id: Annotated[str, Query(max_length=36)]):
+        from sqlalchemy import select
+
+        from ..db import ContractRow
+        with sessions() as s:
+            ids = list(s.scalars(select(ContractRow.id).where(ContractRow.tenant_id == tenant,
+                                                              ContractRow.incident_id == incident_id)
+                                 .order_by(ContractRow.created_at)))
+            return [contracts.get_contract(s, tenant, i) for i in ids]
+
     @app.post("/api/v1/recovery-contracts", dependencies=deps, status_code=201)
     def create(body: CreateContract, who: Annotated[str, Depends(actor)]):
         env = body.environment or settings.default_environment

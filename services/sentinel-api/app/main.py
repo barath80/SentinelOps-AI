@@ -2,7 +2,10 @@ import hmac
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
+from pathlib import Path
+
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql, sqlite
@@ -160,6 +163,22 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
         executor = (ShopAdminExecutor(settings.shop_admin_url, settings.shop_admin_token)
                     if settings.executor == "shop_admin" else MockExecutor())
     recovery_api.register(app, settings, sessions, require_token, executor)
+
+    # Dashboard: static files served same-origin. The CSP forbids inline script and any outside host.
+    app.mount("/ui", StaticFiles(directory=Path(__file__).parent / "ui", html=True), name="ui")
+
+    @app.middleware("http")
+    async def ui_security_headers(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/ui"):
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
+                "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     return app
 
 

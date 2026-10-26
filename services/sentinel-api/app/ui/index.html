@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SentinelOps AI</title>
+  <link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+  <header class="bar">
+    <h1>SentinelOps AI</h1>
+    <form id="connect" class="connect">
+      <label>API token <input id="token" type="password" autocomplete="off" placeholder="bearer token"></label>
+      <label>Your name <input id="actor" type="text" autocomplete="off" placeholder="e.g. alice" maxlength="100"></label>
+      <button type="submit">Connect</button>
+      <button type="button" id="analyze" disabled>Analyze now</button>
+      <label class="inline"><input id="auto" type="checkbox" checked> auto-refresh</label>
+    </form>
+  </header>
+  <p id="status" role="status" class="status"></p>
+  <main class="layout">
+    <nav id="list" aria-label="Incidents"><p class="muted">Enter the token and press Connect.</p></nav>
+    <section id="detail" aria-live="polite"><p class="muted">Select an incident.</p></section>
+  </main>
+  <script src="/ui/app.js"></script>
+</body>
+</html>
