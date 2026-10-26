@@ -9,8 +9,9 @@ from sqlalchemy.dialects import postgresql, sqlite
 
 from .adapters import ADAPTERS
 from .config import Settings, get_settings
-from .db import EventRow, make_session_factory
-from .schemas import EventOut, IngestRequest, IngestResult
+from .analysis.service import analyze
+from .db import EventRow, EvidenceRow, HypothesisRow, IncidentRow, make_session_factory
+from .schemas import EventOut, EvidenceOut, HypothesisOut, IncidentOut, IngestRequest, IngestResult
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -88,6 +89,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             stmt = stmt.where(EventRow.service_name == service)
         with sessions() as session:
             return [EventOut.model_validate(r, from_attributes=True) for r in session.scalars(stmt)]
+
+    def load_incident(session, inc: IncidentRow) -> IncidentOut:
+        hyps = list(session.scalars(select(HypothesisRow).where(HypothesisRow.incident_id == inc.id).order_by(HypothesisRow.score.desc())))
+        ev = list(session.scalars(select(EvidenceRow).where(EvidenceRow.incident_id == inc.id)))
+        out = IncidentOut.model_validate(inc, from_attributes=True)
+        for h in hyps:
+            ho = HypothesisOut.model_validate(h, from_attributes=True)
+            ho.evidence = [EvidenceOut.model_validate(e, from_attributes=True) for e in ev if e.hypothesis_id == h.id]
+            out.hypotheses.append(ho)
+        return out
+
+    @app.post("/api/v1/incidents/analyze", response_model=list[IncidentOut], dependencies=[Depends(require_token)])
+    def run_analysis(
+        window_seconds: Annotated[int, Query(ge=60, le=86400)] = 900,
+        as_of: Annotated[datetime | None, Query(description="Analyze as of this time (default: now)")] = None,
+    ) -> list[IncidentOut]:
+        when = as_of or datetime.now(timezone.utc)
+        if when.tzinfo is None:
+            raise HTTPException(status_code=422, detail="as_of must include a timezone")
+        with sessions.begin() as session:
+            ids = analyze(session, settings.default_tenant_id, when, window_seconds)
+            incidents = [session.get(IncidentRow, i) for i in ids]
+            return [load_incident(session, i) for i in incidents if i]
+
+    @app.get("/api/v1/incidents", response_model=list[IncidentOut], dependencies=[Depends(require_token)])
+    def list_incidents(limit: Annotated[int, Query(ge=1, le=100)] = 20) -> list[IncidentOut]:
+        stmt = (select(IncidentRow).where(IncidentRow.tenant_id == settings.default_tenant_id)
+                .order_by(IncidentRow.started_at.desc()).limit(limit))
+        with sessions() as session:
+            return [load_incident(session, i) for i in session.scalars(stmt)]
+
+    @app.get("/api/v1/incidents/{incident_id}", response_model=IncidentOut, dependencies=[Depends(require_token)])
+    def get_incident(incident_id: str) -> IncidentOut:
+        with sessions() as session:
+            inc = session.get(IncidentRow, incident_id)
+            # Tenant check on every read: another tenant's id looks like "not found".
+            if inc is None or inc.tenant_id != settings.default_tenant_id:
+                raise HTTPException(status_code=404, detail="not_found")
+            return load_incident(session, inc)
 
     return app
 

@@ -47,3 +47,40 @@ class EventOut(BaseModel):
     severity: Severity | None
     request_id: str | None
     attributes: dict[str, Any]
+
+
+class EvidenceOut(BaseModel):
+    id: str
+    hypothesis_id: str
+    relation: Literal["supports", "contradicts", "neutral", "missing"]
+    strength: float
+    explanation: str
+    source_refs: list[str]
+    query_fingerprint: str
+    created_by: str
+
+
+class HypothesisOut(BaseModel):
+    id: str
+    cause_key: str
+    title: str
+    score: float
+    score_version: str
+    score_is_probability: bool = False
+    status: str
+    next_test_id: str
+    breakdown: dict[str, Any]
+    evidence: list[EvidenceOut] = Field(default_factory=list)
+
+
+class IncidentOut(BaseModel):
+    id: str
+    title: str
+    severity: str
+    status: str
+    assessment: str
+    started_at: datetime
+    detected_at: datetime
+    routes: list[str]
+    summary: dict[str, Any]
+    hypotheses: list[HypothesisOut] = Field(default_factory=list)
