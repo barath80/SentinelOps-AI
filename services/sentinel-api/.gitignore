@@ -3,3 +3,7 @@ __pycache__/
 *.db
 .venv/
 .env
+
+# trained model artifacts: regenerate with notebooks/root_cause_model.ipynb
+models/*.joblib
+.ipynb_checkpoints/
