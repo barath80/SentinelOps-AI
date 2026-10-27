@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
 import EmptyState from "@/components/EmptyState";
@@ -116,6 +117,21 @@ async function Results({ searchParams }: Pick<PageProps<"/search">, "searchParam
       </section>
     </div>
   );
+}
+
+export async function generateMetadata({ searchParams }: PageProps<"/search">): Promise<Metadata> {
+  const sp = await searchParams;
+  const q = typeof sp.q === "string" ? sp.q : undefined;
+  const category = typeof sp.category === "string" ? CATEGORIES.find((c) => c.id === sp.category)?.name : undefined;
+  // Only the bare landing view and bare category views are worth indexing; a text query or any
+  // price/rating/brand/page filter would otherwise create endless near-duplicate pages.
+  const hasNarrowingFilter = ["q", "min", "max", "rating", "brand", "page"].some((k) => sp[k]);
+  const title = q ? `"${q}" search results` : category ? `${category} — Shop ${category}` : "Search";
+  return {
+    title,
+    alternates: { canonical: "/search" },
+    robots: hasNarrowingFilter ? { index: false, follow: true } : undefined,
+  };
 }
 
 export default function SearchPage({ searchParams }: PageProps<"/search">) {

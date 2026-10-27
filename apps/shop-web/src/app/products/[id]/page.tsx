@@ -5,6 +5,7 @@ import BuyBox from "@/components/BuyBox";
 import ProductCard from "@/components/ProductCard";
 import Stars from "@/components/Stars";
 import { CATEGORIES, formatCount, getProduct, PRODUCTS, type Product } from "@/lib/products";
+import { buildBreadcrumbJsonLd, buildProductJsonLd, productMetaDescription, siteUrl } from "@/lib/seo";
 
 // Share of reviews per star level, derived from the average so the bars agree with the rating.
 function distribution(p: Product): number[] {
@@ -21,7 +22,13 @@ export async function generateMetadata({ params }: PageProps<"/products/[id]">):
   const { id } = await params;
   const p = getProduct(id);
   if (!p) notFound();
-  return { title: p.name };
+  const description = productMetaDescription(p);
+  return {
+    title: p.name,
+    description,
+    alternates: { canonical: `/products/${p.id}` },
+    openGraph: { title: p.name, description, type: "website", images: [`/products/${p.id}/opengraph-image`] },
+  };
 }
 
 export default async function ProductPage({ params }: PageProps<"/products/[id]">) {
@@ -31,9 +38,18 @@ export default async function ProductPage({ params }: PageProps<"/products/[id]"
   const category = CATEGORIES.find((c) => c.id === p.category)!;
   const related = PRODUCTS.filter((x) => x.category === p.category && x.id !== p.id).slice(0, 6);
   const dist = distribution(p);
+  const base = siteUrl();
+  const productUrl = `${base}/products/${p.id}`;
+  const breadcrumbJsonLd = buildBreadcrumbJsonLd([
+    { name: "Home", url: base },
+    { name: category.name, url: `${base}/search?category=${category.id}` },
+    { name: p.name, url: productUrl },
+  ]);
 
   return (
     <>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(buildProductJsonLd(p, productUrl)) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd) }} />
       <nav className="mb-3 text-sm text-zinc-500" aria-label="Breadcrumb">
         <Link href="/" className="hover:underline">Home</Link> ›{" "}
         <Link href={`/search?category=${category.id}`} className="hover:underline">{category.name}</Link> ›{" "}

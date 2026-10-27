@@ -1,6 +1,10 @@
+import type { Metadata } from "next";
 import { Suspense } from "react";
 import AuthForm from "@/components/AuthForm";
+import { NOINDEX } from "@/lib/seo";
 import { googleConfigured, safeNext } from "@/lib/session";
+
+export const metadata: Metadata = { title: "Sign in", ...NOINDEX };
 
 async function Login({ searchParams }: Pick<PageProps<"/login">, "searchParams">) {
   const sp = await searchParams;

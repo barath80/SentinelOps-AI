@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
@@ -5,7 +6,10 @@ import EmptyState from "@/components/EmptyState";
 import OrderLines from "@/components/OrderLines";
 import { listOrders } from "@/lib/orders";
 import { formatPrice } from "@/lib/products";
+import { NOINDEX } from "@/lib/seo";
 import { getSession } from "@/lib/session";
+
+export const metadata: Metadata = { title: "Your orders", ...NOINDEX };
 
 async function Orders() {
   const session = await getSession();
