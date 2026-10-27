@@ -1,4 +1,5 @@
 import hmac
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
@@ -18,10 +19,10 @@ from .config import Settings, get_settings
 from . import maintenance, prevention
 from .analysis.diagnostics import TESTS, investigate, run_test
 from .analysis.service import analyze
-from .db import DiagnosticRunRow, EventRow, EvidenceRow, HypothesisRow, IncidentRow, make_session_factory
+from .db import DiagnosticRunRow, EventRow, EvidenceRow, IncidentLabelRow, HypothesisRow, IncidentRow, make_session_factory
 from .recovery import api as recovery_api
 from .recovery.executors import Executor, MockExecutor, ShopAdminExecutor
-from .schemas import DiagnosticRequest, DiagnosticRunOut, InvestigateRequest, EventOut, EvidenceOut, HypothesisOut, IncidentOut, IngestRequest, IngestResult
+from .schemas import LabelRequest, DiagnosticRequest, DiagnosticRunOut, InvestigateRequest, EventOut, EvidenceOut, HypothesisOut, IncidentOut, IngestRequest, IngestResult
 
 
 def create_app(settings: Settings | None = None, executor: Executor | None = None) -> FastAPI:
@@ -124,6 +125,9 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
             out.hypotheses.append(ho)
         for d in session.scalars(select(DiagnosticRunRow).where(DiagnosticRunRow.incident_id == inc.id).order_by(DiagnosticRunRow.created_at)):
             out.diagnostic_runs.append(DiagnosticRunOut.model_validate(d, from_attributes=True))
+        lab = session.get(IncidentLabelRow, inc.id)
+        if lab:
+            out.label = {"label": lab.label, "labeled_by": lab.labeled_by, "note": lab.note, "labeled_at": lab.labeled_at.isoformat()}
         return out
 
     def own_incident(session, incident_id: str) -> IncidentRow:
@@ -148,6 +152,59 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
             run_test(session, inc, body.test_id)
             return load_incident(session, inc)
 
+    def actor(x_actor: Annotated[str | None, Header()] = None) -> str:
+        if not x_actor or not re.match(r"^[A-Za-z0-9_.@-]{1,100}$", x_actor):
+            raise HTTPException(status_code=400, detail="x_actor_header_required")
+        return x_actor
+
+    @app.post("/api/v1/incidents/{incident_id}/label", dependencies=[Depends(require_token)])
+    def label_incident(incident_id: str, body: LabelRequest, who: Annotated[str, Depends(actor)]) -> IncidentOut:
+        with sessions.begin() as session:
+            inc = own_incident(session, incident_id)
+            row = session.get(IncidentLabelRow, inc.id)
+            if row is None:
+                row = IncidentLabelRow(incident_id=inc.id)
+                session.add(row)
+            row.label, row.labeled_by, row.note = body.label, who, body.note
+            row.labeled_at = datetime.now(timezone.utc)
+            session.flush()
+            return load_incident(session, inc)
+
+    @app.get("/api/v1/training/labelled", dependencies=[Depends(require_token)])
+    def labelled() -> list[dict]:
+        """Labelled incidents with the features the model sees: an evaluation set from real traffic."""
+        with sessions() as session:
+            q = (select(IncidentLabelRow, IncidentRow).join(IncidentRow, IncidentRow.id == IncidentLabelRow.incident_id)
+                 .where(IncidentRow.tenant_id == settings.default_tenant_id).order_by(IncidentLabelRow.labeled_at))
+            out = []
+            for lab, inc in session.execute(q):
+                shadow = (inc.summary or {}).get("shadow_model") or {}
+                out.append({"incident_id": inc.id, "label": lab.label, "labeled_by": lab.labeled_by, "labeled_at": lab.labeled_at.isoformat(),
+                            "note": lab.note, "started_at": inc.started_at.isoformat(), "title": inc.title,
+                            "features": (inc.summary or {}).get("model_features"), "rule_answer": (inc.summary or {}).get("rule_answer"),
+                            "shadow_prediction": shadow.get("prediction"), "shadow_version": shadow.get("version")})
+            return out
+
+    @app.get("/api/v1/shadow/report", dependencies=[Depends(require_token)])
+    def shadow_report() -> dict:
+        """How often the shadow model agrees with the rule engine, and with human labels."""
+        with sessions() as session:
+            incs = list(session.scalars(select(IncidentRow).where(IncidentRow.tenant_id == settings.default_tenant_id)))
+            labels = {l.incident_id: l.label for l in session.scalars(select(IncidentLabelRow).where(
+                IncidentLabelRow.incident_id.in_([i.id for i in incs] or [""])))}
+        with_shadow = [i for i in incs if (i.summary or {}).get("shadow_model")]
+        agree = sum(1 for i in with_shadow if i.summary["shadow_model"].get("agrees_with_rules"))
+        judged = [i for i in with_shadow if i.id in labels]
+        model_ok = sum(1 for i in judged if i.summary["shadow_model"]["prediction"] == labels[i.id])
+        rules_ok = sum(1 for i in judged if i.summary.get("rule_answer") == labels[i.id])
+        return {"incidents": len(incs), "with_shadow_prediction": len(with_shadow),
+                "agreement_with_rules": round(agree / len(with_shadow), 3) if with_shadow else None,
+                "labelled": len(judged),
+                "model_correct": model_ok, "rules_correct": rules_ok,
+                "model_accuracy": round(model_ok / len(judged), 3) if judged else None,
+                "rules_accuracy": round(rules_ok / len(judged), 3) if judged else None,
+                "note": "Shadow predictions are recorded only; they never change rankings, recommendations or actions."}
+
     @app.post("/api/v1/incidents/{incident_id}/investigate", dependencies=[Depends(require_token)])
     def run_investigation(incident_id: str, body: InvestigateRequest | None = None) -> dict:
         with sessions.begin() as session:
@@ -164,7 +221,7 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
         if when.tzinfo is None:
             raise HTTPException(status_code=422, detail="as_of must include a timezone")
         with sessions.begin() as session:
-            ids = analyze(session, settings.default_tenant_id, when, window_seconds)
+            ids = analyze(session, settings.default_tenant_id, when, window_seconds, shadow=settings.shadow_model)
             incidents = [session.get(IncidentRow, i) for i in ids]
             return [load_incident(session, i) for i in incidents if i]
 

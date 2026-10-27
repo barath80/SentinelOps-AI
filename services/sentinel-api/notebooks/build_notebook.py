@@ -282,12 +282,60 @@ check = decide(reloaded["model"].predict_proba(testA_df[FEATURES].to_numpy()[:20
 assert (check == preds["A: in-distribution"][1][:200]).all()
 print("reloaded model reproduces the test predictions")"""),
 
-md("""## 10. Conclusions and limits
+md("""## 10. Compact serving model for the API (shadow mode)
+
+The selected model is about 29 MB (five calibrated copies of a 300-tree forest), too large to ship inside the API image. For **shadow mode** (the API records a prediction next to the rule engine's, without acting on it) a compact logistic regression is exported as a few kilobytes of JSON and served by pure-Python code (`app/analysis/learned.py`), with no pickle loading on the server. It gets its own abstention threshold for 99% precision on validation, and its own held-out results, so the trade-off against the forest is visible."""),
+
+code("""from app.analysis.learned import ServingModel
+
+lr_C = searches["logistic_regression"].best_params_["logisticregression__C"]
+serving = make_pipeline(StandardScaler(), LogisticRegression(max_iter=3000, class_weight="balanced", C=lr_C)).fit(X_fit, y_fit)
+s_classes = list(serving.classes_)
+p_val_s = serving.predict_proba(X_val)
+
+def decide_s(proba, tau):
+    top = np.array(s_classes)[proba.argmax(axis=1)]
+    return np.where(proba.max(axis=1) >= tau, top, "unknown")
+
+TAU_S = 0.99
+for tau in np.round(np.arange(0.30, 0.991, 0.01), 2):
+    pred = decide_s(p_val_s, tau); named = pred != "unknown"
+    if named.any() and (pred[named] == y_val[named]).mean() >= TARGET_PRECISION:
+        TAU_S = float(tau); break
+print("serving model: C =", lr_C, "| tau =", TAU_S, "| validation log loss", round(log_loss(y_val, p_val_s, labels=s_classes), 4))
+
+serving_results = []
+for set_name, df in (("A: in-distribution", testA_df), ("B: shifted", testB_df)):
+    ys = df["label"].to_numpy()
+    serving_results.append({"test set": set_name, "system": "serving LR (shadow)", **scores(ys, decide_s(serving.predict_proba(df[FEATURES].to_numpy()), TAU_S))})
+    serving_results.append({"test set": set_name, "system": f"selected {best_name}", **scores(ys, preds[set_name][1])})
+pd.DataFrame(serving_results).set_index(["test set", "system"]).round(3)"""),
+
+code("""scaler, lr = serving.named_steps["standardscaler"], serving.named_steps["logisticregression"]
+spec = {"version": "root-cause-serving-v1", "algorithm": "logistic_regression", "C": lr_C, "features": FEATURES,
+        "classes": s_classes, "scaler_mean": scaler.mean_.tolist(), "scaler_scale": scaler.scale_.tolist(),
+        "coef": lr.coef_.tolist(), "intercept": lr.intercept_.tolist(), "tau": TAU_S, "target_precision": TARGET_PRECISION,
+        "results": {f"{r['test set']}": {k: float(v) for k, v in r.items() if k not in ("test set", "system")}
+                    for r in serving_results if r["system"].startswith("serving")},
+        "trained_on": "simulated incidents (training/generator.py), see models/MODEL_CARD.md"}
+serve_path = ROOT / "app" / "models" / "root_cause_serving_v1.json"
+serve_path.write_text(json.dumps(spec, indent=1))
+print("wrote", serve_path, f"({serve_path.stat().st_size / 1024:.1f} KB)")
+
+# Parity: the pure-Python server must reproduce scikit-learn's probabilities exactly.
+py_model = ServingModel(spec)
+Xa = testA_df[FEATURES]
+sk = serving.predict_proba(Xa.to_numpy())
+py = np.array([[py_model.predict_proba(dict(zip(FEATURES, row)))[c] for c in s_classes] for row in Xa.to_numpy()])
+print("max |sklearn - pure python| probability difference:", float(np.abs(sk - py).max()))
+assert np.abs(sk - py).max() < 1e-9"""),
+
+md("""## 11. Conclusions and limits
 
 - Read the comparison table in section 6 for the actual numbers of this run; the model card in `models/MODEL_CARD.md` records them.
 - The learned model is trained and tested on **simulated** incidents. Its advantage over the rule engine is measured on data from the same simulator family; the shifted set shows how much of it survives one kind of distribution change.
 - The rule engine still has things this classifier does not: per-hypothesis evidence with source links and falsification tests. The intended use is to **combine** them (the model ranks causes; the ledger and diagnostics justify and challenge the ranking), not to replace the evidence trail with a bare prediction.
-- Next steps: collect labelled real incidents, re-evaluate, and only then wire the model into the API behind a flag, logging both answers side by side before it influences any recovery action."""),
+- The compact serving model runs in the API in **shadow mode** only: it records its answer next to the rule engine's for every incident and never influences a recovery action. Labelled real incidents exported from the API (`GET /api/v1/training/labelled`) are the next evaluation set."""),
 ]
 
 nb = nbf.v4.new_notebook(cells=cells, metadata={"kernelspec": {"name": "python3", "display_name": "Python 3", "language": "python"}})

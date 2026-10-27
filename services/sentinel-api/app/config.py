@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     auto_investigate: bool = False  # read-only diagnostics only; never proposes or executes actions
     retention_days: int = 7  # events older than this are purged unless an incident cites them
     purge_interval_seconds: int = 3600
+    # Record the learned model's prediction next to the rule engine's (never used for decisions).
+    shadow_model: bool = True
     # An approval is only good for this long: conditions may have changed since it was given.
     approval_ttl_seconds: int = 1800
 

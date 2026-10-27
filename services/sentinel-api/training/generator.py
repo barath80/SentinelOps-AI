@@ -71,6 +71,10 @@ def generate(label: str, seed: int, dist: Dist = STANDARD) -> Sample:
     slow_extra, surge = u(dist.slow_extra), u(dist.surge_mult)
     timeout_ms = r.uniform(2000, 5000)
     slow_products_too = label == "slow_dependency" and r.random() < 0.3
+    # Closed-loop clients (scripts, bots, users waiting on a page) send the next request only after
+    # the previous one returns, so slow responses also LOWER the request rate. Observed on the real
+    # shop under the S03 slow-query fault; about half of the simulated traffic behaves this way.
+    closed_loop = r.random() < 0.5
 
     def healthy_duration(route: str) -> float:
         d = mu[route] * math.exp(r.gauss(0, jitter))
@@ -97,6 +101,10 @@ def generate(label: str, seed: int, dist: Dist = STANDARD) -> Sample:
     n_recent = r.randint(*dist.n_recent)
     if label == "traffic_surge":
         n_recent = int(n_recent * surge)
+    added_ms = {"slow_dependency": slow_extra, "payment_provider_timeout": timeout_ms}.get(label, 0.0) * severity
+    if closed_loop and added_ms:
+        cycle_ms = r.uniform(300, 1500)  # a client's usual time per round of requests
+        n_recent = max(5, int(n_recent * cycle_ms / (cycle_ms + added_ms)))
     version = "v2" if (label == "release_regression" or decoy) else "v1"
     for i in range(n_recent):
         t = NOW - timedelta(seconds=105 - i * (100 / n_recent))
@@ -126,7 +134,7 @@ def generate(label: str, seed: int, dist: Dist = STANDARD) -> Sample:
                 status, dur = 500, r.uniform(20, 80)  # plain errors with no distinguishing signal
             emit(_line(ts, route, status, dur, version, rid, message, **extra))
 
-    params = {"jitter": jitter, "base_err": base_err, "drop": drop, "decoy": decoy, "severity": severity,
+    params = {"closed_loop": closed_loop, "jitter": jitter, "base_err": base_err, "drop": drop, "decoy": decoy, "severity": severity,
               "exc_p": exc_p, "timeout_log_p": tlog_p, "checkout_mu": mu["/api/checkout"], "n_base": n_base,
               "n_recent": n_recent}
     return Sample(events, label, params)

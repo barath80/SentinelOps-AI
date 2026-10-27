@@ -190,6 +190,29 @@ function preventionSection(inc) {
     state.prevention.length ? state.prevention.map(artifactCard) : null];
 }
 
+const LABELS = ["release_regression", "payment_provider_timeout", "slow_dependency", "traffic_surge", "unknown", "no_fault"];
+
+function shadowSection(inc) {
+  const sh = inc.summary.shadow_model;
+  if (!sh) return null;
+  const probs = Object.entries(sh.probabilities).slice(0, 3).map(([k, v]) => `${k} ${(v * 100).toFixed(0)}%`).join(", ");
+  return [h("h3", {}, "Learned model (shadow)"),
+    h("p", {}, badge(sh.abstained ? "abstained" : sh.prediction, sh.abstained ? "warn" : "neutral"),
+      badge(sh.agrees_with_rules ? "agrees with rules" : "disagrees with rules", sh.agrees_with_rules ? "good" : "warn"),
+      h("span", { class: "note" }, ` ${sh.version}: top ${probs}; names a cause only at ${(sh.tau * 100).toFixed(0)}%+ confidence.`)),
+    h("p", { class: "note" }, "Recorded for evaluation only. It never changes the ranking, the recommendation or any recovery action.")];
+}
+
+function labelSection(inc) {
+  const select = h("select", { "aria-label": "True cause" }, LABELS.map((l) => h("option", { value: l, selected: inc.label && inc.label.label === l ? "selected" : null }, l)));
+  const note = h("input", { type: "text", placeholder: "how you know (optional)", maxlength: "500" });
+  return [h("h3", {}, "Label the true cause"),
+    inc.label ? h("p", {}, badge(inc.label.label, "good"), h("span", { class: "note" }, ` labelled by ${inc.label.labeled_by} ${fmtTime(inc.label.labeled_at)}${inc.label.note ? ": " + inc.label.note : ""}`)) : null,
+    h("div", { class: "row" }, select, note,
+      h("button", { type: "button", class: "secondary", onclick: () => run("Save label", async () => { requireActor(); await api(`/api/v1/incidents/${inc.id}/label`, { method: "POST", actor: true, body: { label: select.value, note: note.value } }); }) }, inc.label ? "Update label" : "Save label")),
+    h("p", { class: "note" }, "Labelled incidents become the evaluation set for the learned model (GET /api/v1/training/labelled).")];
+}
+
 function renderDetail() {
   const el = $("#detail");
   const inc = state.incidents.find((i) => i.id === state.selected);
@@ -208,9 +231,11 @@ function renderDetail() {
     h("h3", {}, "Hypotheses (ranked)"),
     inc.hypotheses.map((x) => hypothesisCard(x, inc)),
     attributionSection(inc),
+    shadowSection(inc),
     diagnosticsSection(inc),
     recoverySection(inc),
-    preventionSection(inc)));
+    preventionSection(inc),
+    labelSection(inc)));
 }
 
 function render() { renderList(); renderDetail(); }

@@ -34,6 +34,17 @@ class Context:
     samples: list[Sample]
     timeouts: list[tuple[str, datetime, str | None]]  # (event_id, time, request_id)
     metrics: list[EventRow]
+    spans: dict[str, list[EventRow]] = field(default_factory=dict)  # trace_id -> span events
+
+
+def _child_spans(ctx: "Context", s: Sample) -> list[EventRow]:
+    """The child spans (anything but the root) recorded for one request's trace."""
+    return [sp for sp in ctx.spans.get(s.trace_id or "", []) if (sp.attributes or {}).get("parent_span_id")]
+
+
+def _span_ms(sp: EventRow) -> float:
+    v = (sp.attributes or {}).get("duration_ms")
+    return float(v) if isinstance(v, (int, float)) else 0.0
 
 
 @dataclass
@@ -96,9 +107,18 @@ def inspect_payment_provider_status_and_spans(ctx: Context) -> DiagnosticResult:
     if not bad:
         return DiagnosticResult("no_data", 0.0, "No failing requests to match against payment timeouts.")
     timeout_requests = {rid for _, _, rid in ctx.timeouts if rid}
-    matched = [s for s in bad if s.request_id in timeout_requests]
+
+    def payment_span_failed(s: Sample) -> bool:
+        return any(str((sp.attributes or {}).get("name", "")).startswith("payment.")
+                   and ((sp.attributes or {}).get("status") == "error" or _span_ms(sp) >= 2000)
+                   for sp in _child_spans(ctx, s))
+
+    # Either signal counts: a payment_timeout log line, or a failed/slow payment span in the trace.
+    matched = [s for s in bad if s.request_id in timeout_requests or payment_span_failed(s)]
     share = len(matched) / len(bad)
     details = {"failing_requests": len(bad), "with_payment_timeout": len(matched),
+               "matched_by_log": sum(1 for s in bad if s.request_id in timeout_requests),
+               "matched_by_trace": sum(1 for s in bad if payment_span_failed(s)),
                "provider_status_feed": "not checked (no external feed configured)"}
     refs = [s.event_id for s in matched[:5]]
     if share >= 0.8:
@@ -109,15 +129,38 @@ def inspect_payment_provider_status_and_spans(ctx: Context) -> DiagnosticResult:
     return DiagnosticResult("inconclusive", 0.0, f"{share:.0%} of failing requests logged a payment timeout: neither clearly explained nor ruled out.", details, refs)
 
 
+def _db_share_from_traces(ctx: Context) -> DiagnosticResult | None:
+    """If the slow requests were traced: does time inside database spans explain the slowness?"""
+    traced = [(s, _child_spans(ctx, s)) for s in ctx.features.bad]
+    traced = [(s, kids) for s, kids in traced if kids]
+    if len(traced) < 3:
+        return None
+    shares = []
+    for s, kids in traced:
+        db_ms = sum(_span_ms(k) for k in kids if str((k.attributes or {}).get("name", "")).startswith("db."))
+        shares.append(min(1.0, db_ms / max(s.duration_ms, 1.0)))
+    med = statistics.median(shares)
+    details = {"traced_slow_requests": len(traced), "median_share_in_db_spans": round(med, 3)}
+    refs = [k.event_id for _, kids in traced[:3] for k in kids[:2]]
+    if med >= 0.5:
+        return DiagnosticResult("supports", 0.9, f"Database spans account for {med:.0%} of the slow requests' time (median over {len(traced)} traces).", details, refs)
+    if med <= 0.2:
+        return DiagnosticResult("contradicts", 0.8, f"Only {med:.0%} of the slow requests' time is spent in database spans (median over {len(traced)} traces); the time goes elsewhere.", details, refs)
+    return DiagnosticResult("inconclusive", 0.0, f"Database spans account for {med:.0%} of the slow requests' time: partly but not clearly the cause.", details, refs)
+
+
 def inspect_db_pool_wait_and_query_duration(ctx: Context) -> DiagnosticResult:
-    """Needs database metrics (db_query_duration_ms or db_pool_wait_ms) ingested as metric events."""
+    """Database metrics (db_query_duration_ms / db_pool_wait_ms) if ingested, otherwise traces."""
     wanted = ("db_query_duration_ms", "db_pool_wait_ms")
     rows = [r for r in ctx.metrics if (r.attributes or {}).get("metric_name") in wanted
             and isinstance((r.attributes or {}).get("value"), (int, float))]
     if not rows:
+        from_traces = _db_share_from_traces(ctx)
+        if from_traces is not None:
+            return from_traces
         return DiagnosticResult("no_data", 0.0,
-            "No database metrics (query duration, pool wait) have been ingested, so this cannot be tested. Add a database metrics source.",
-            {"looked_for": list(wanted)})
+            "No database metrics (query duration, pool wait) and no request traces have been ingested, so this cannot be tested.",
+            {"looked_for": list(wanted) + ["db.* spans in request traces"]})
     cut = ctx.candidate.recent_start
     before = [r.attributes["value"] for r in rows if _aware(r.event_time) < cut]
     after = [r.attributes["value"] for r in rows if _aware(r.event_time) >= cut]
@@ -167,7 +210,11 @@ def load_context(session: Session, incident: IncidentRow, cfg: DetectionConfig =
     timeouts = [(r.event_id, _aware(r.event_time), r.request_id) for r in rows
                 if (r.attributes or {}).get("message") == "payment_timeout"]
     feats = compute_features(cand, samples, [(i, t) for i, t, _ in timeouts])
-    return Context(cand, feats, samples, timeouts, [r for r in rows if r.event_type == "metric"])
+    spans: dict[str, list[EventRow]] = {}
+    for r in rows:
+        if r.event_type == "trace" and r.trace_id:
+            spans.setdefault(r.trace_id, []).append(r)
+    return Context(cand, feats, samples, timeouts, [r for r in rows if r.event_type == "metric"], spans)
 
 
 # ---- persistence + rescoring ---------------------------------------------------------------

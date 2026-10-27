@@ -19,6 +19,7 @@ Synthetic demo shop used as a workload for SentinelOps AI. Next.js (App Router),
 
 - Set `SENTINEL_INGEST_URL` and `SENTINEL_INGEST_TOKEN` and the shop pushes its structured log lines to `services/sentinel-api` after each response (works on Vercel Hobby, which has no Log Drains). Copy `.env.example` to `.env.local`.
 - Faults are off by default. `FAULT_SCENARIO` (or `POST /api/admin/fault` with `x-admin-token`) selects one of: `S01_bad_deployment` (checkout 500s, release label changes to `v2`), `S03_slow_query` (+1.5 s checkout), `S05_payment_timeout` (504 after 3 s).
+- Each API request is traced (`src/lib/trace.ts`): a root span plus child spans for database queries and the payment call, pushed to SentinelOps with the `otel_span` adapter; log lines carry the `trace_id`. Fault S03's delay happens inside the database span, like a real slow query.
 - Ground truth stays out of telemetry: the scenario name is written only to the local console, and `/api/admin` requests are never pushed.
 - The admin override is per server instance. On serverless, use the `FAULT_SCENARIO` env var until a durable store exists.
 

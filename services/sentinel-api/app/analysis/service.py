@@ -8,7 +8,9 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..db import DiagnosticRunRow, EvidenceRow, EventRow, HypothesisRow, IncidentRow
+from . import learned
 from .attribution import attribute
+from .ml_features import features_for_candidate
 from .diagnostics import reapply
 from .detect import DetectionConfig, IncidentCandidate, detect, group, samples_from_rows
 from .hypotheses import SCORE_VERSION, build_hypotheses, compute_features, rank
@@ -33,7 +35,7 @@ def _title(c: IncidentCandidate) -> str:
 
 
 def analyze(session: Session, tenant_id: str, as_of: datetime, window_seconds: int = 900,
-            cfg: DetectionConfig = DetectionConfig()) -> list[str]:
+            cfg: DetectionConfig = DetectionConfig(), shadow: bool = True) -> list[str]:
     """Detect incidents in [as_of - window, as_of]. Returns incident ids (created or refreshed)."""
     as_of = _aware(as_of)
     since = as_of - timedelta(seconds=window_seconds)
@@ -42,6 +44,8 @@ def analyze(session: Session, tenant_id: str, as_of: datetime, window_seconds: i
     ))
     samples = samples_from_rows(rows)
     timeouts = [(r.event_id, _aware(r.event_time)) for r in rows if (r.attributes or {}).get("message") == "payment_timeout"]
+    timeouts_with_ids = [(r.event_id, _aware(r.event_time), r.request_id) for r in rows
+                         if (r.attributes or {}).get("message") == "payment_timeout"]
     valid_event_ids = {r.event_id for r in rows}
 
     ids: list[str] = []
@@ -49,6 +53,15 @@ def analyze(session: Session, tenant_id: str, as_of: datetime, window_seconds: i
         timeouts_for_features = timeouts
         feats = compute_features(cand, samples, timeouts)
         ranked, assessment = rank(build_hypotheses(cand, feats))
+        rule_answer = ranked[0].cause_key if assessment == "leading_hypothesis" else "unknown"
+        model_features = features_for_candidate(cand, samples, feats, timeouts_with_ids)
+        shadow_result = None
+        model = learned.load() if shadow else None
+        if model is not None:
+            # Shadow mode: recorded next to the rule engine's answer, never used for any decision.
+            pred = model.predict(model_features)
+            shadow_result = {**pred, "rule_answer": rule_answer, "agrees_with_rules": pred["prediction"] == rule_answer,
+                             "mode": "shadow: recorded only, never used for decisions"}
         incident = _find_open(session, tenant_id, cand, cfg)
         prior_tests: list[str] = []
         history: dict[str, list] = {}
@@ -76,6 +89,9 @@ def analyze(session: Session, tenant_id: str, as_of: datetime, window_seconds: i
             } for a in cand.anomalies],
             "unaffected_routes": feats.unaffected_routes,
             **attribute(cand, samples, timeouts_for_features),
+            "model_features": {k: round(v, 6) for k, v in model_features.items()},
+            "rule_answer": rule_answer,
+            "shadow_model": shadow_result,
         }
         session.flush()
         for h in ranked:

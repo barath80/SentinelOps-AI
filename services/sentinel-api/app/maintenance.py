@@ -60,7 +60,7 @@ def tick(sessions: sessionmaker, settings: Settings, now: datetime | None = None
     now = now or datetime.now(timezone.utc)
     out: dict = {"analyzed": 0, "investigated": 0, "purged": None}
     with sessions.begin() as s:
-        ids = analyze(s, settings.default_tenant_id, now, settings.analysis_window_seconds)
+        ids = analyze(s, settings.default_tenant_id, now, settings.analysis_window_seconds, shadow=settings.shadow_model)
         out["analyzed"] = len(ids)
         if settings.auto_investigate:
             for i in ids:

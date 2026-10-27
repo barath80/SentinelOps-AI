@@ -90,6 +90,14 @@ class DiagnosticRequest(BaseModel):
     test_id: str
 
 
+LABELS = ("release_regression", "payment_provider_timeout", "slow_dependency", "traffic_surge", "unknown", "no_fault")
+
+
+class LabelRequest(BaseModel):
+    label: Literal["release_regression", "payment_provider_timeout", "slow_dependency", "traffic_surge", "unknown", "no_fault"]
+    note: str = Field(default="", max_length=500)
+
+
 class InvestigateRequest(BaseModel):
     budget: int = Field(default=3, ge=1, le=6)
 
@@ -106,3 +114,4 @@ class IncidentOut(BaseModel):
     summary: dict[str, Any]
     hypotheses: list[HypothesisOut] = Field(default_factory=list)
     diagnostic_runs: list[DiagnosticRunOut] = Field(default_factory=list)
+    label: dict[str, Any] | None = None

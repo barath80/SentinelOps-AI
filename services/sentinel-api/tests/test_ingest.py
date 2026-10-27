@@ -128,3 +128,43 @@ def test_normalized_adapter_ignores_client_supplied_tenant(client):
     }
     assert post(client, [ev], adapter="normalized").json()["accepted"] == 1
     assert len(client.get(URL, headers=AUTH).json()) == 1
+
+
+# ---- traces and metrics ------------------------------------------------------------------------
+
+def span(**over):
+    start = int(datetime.now(timezone.utc).timestamp() * 1e9)
+    base = {"traceId": "4bf92f3577b34da6a3ce929d0e0e4736", "spanId": "00f067aa0ba902b7", "name": "payment.authorize",
+            "serviceName": "shop-web", "startTimeUnixNano": start, "endTimeUnixNano": start + 3_000_000_000,
+            "status": {"code": 2}, "attributes": {"http.route": "/api/checkout", "nested": {"dropped": True}}}
+    return {**base, **over}
+
+
+def test_otel_span_is_normalized_as_a_trace_event(client):
+    assert post(client, [span()], adapter="otel_span").json()["accepted"] == 1
+    [ev] = client.get(URL, headers=AUTH).json()
+    assert ev["event_type"] == "trace" and ev["severity"] == "error"
+    a = ev["attributes"]
+    assert a["name"] == "payment.authorize" and a["duration_ms"] == 3000.0 and a["status"] == "error"
+    assert a["http.route"] == "/api/checkout" and "nested" not in a  # only flat scalar attributes are kept
+
+
+def test_span_redelivery_is_idempotent_and_bad_spans_rejected(client):
+    assert post(client, [span(), span()], adapter="otel_span").json()["accepted"] == 1
+    bad = [span(traceId="not-hex"), span(endTimeUnixNano=1), span(name=""), span(startTimeUnixNano="soon")]
+    assert post(client, bad, adapter="otel_span").json()["rejected"] == 4
+
+
+def test_metric_points_are_validated(client):
+    now = datetime.now(timezone.utc).isoformat()
+    good = {"name": "db_query_duration_ms", "value": 12.5, "timestamp": now, "serviceName": "postgres", "labels": {"query": "orders.insert"}}
+    res = post(client, [good, {**good, "value": "fast"}, {**good, "name": "rm -rf /"}, {**good, "value": True}], adapter="metric").json()
+    assert (res["accepted"], res["rejected"]) == (1, 3)
+    [ev] = client.get(URL, headers=AUTH).json()
+    assert ev["event_type"] == "metric" and ev["attributes"]["metric_name"] == "db_query_duration_ms"
+
+
+def test_shop_lines_carry_their_trace_id(client):
+    post(client, [shop_line(trace_id="4bf92f3577b34da6a3ce929d0e0e4736")])
+    [ev] = client.get(URL, headers=AUTH).json()
+    assert "trace_id" not in ev["attributes"]  # moved to the event's trace_id field

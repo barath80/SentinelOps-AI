@@ -5,6 +5,7 @@ import { findByKey, publicView, saveOrder, validateShipping } from "@/lib/orders
 import { authorize, PaymentTimeout } from "@/lib/payment";
 import { log } from "@/lib/log";
 import { getSession } from "@/lib/session";
+import { withSpan } from "@/lib/trace";
 
 // Requires an Idempotency-Key header so client retries never create duplicate orders.
 // Body (optional): { shipping }. Signed-in orders are linked to the user. Guest checkout stays
@@ -16,16 +17,19 @@ export const POST = instrument("/api/checkout", async (req, _ctx, requestId) => 
   }
 
   const scenario = activeScenario();
-  // S01: the "new release" crashes in checkout. S03: a slow query adds latency.
+  // S01: the "new release" crashes in checkout. (S03, a slow query, is applied inside the DB span below.)
   if (scenario === "S01_bad_deployment") throw new InjectedFault("TypeError: cannot read properties of undefined (reading 'total')");
-  if (scenario === "S03_slow_query") await sleep(1500);
 
   const body = (await req.json().catch(() => ({}))) as { shipping?: unknown };
   const shipping = validateShipping(body?.shipping);
   if (shipping === "invalid") return Response.json({ error: "invalid_shipping" }, { status: 400 });
   const session = await getSession();
 
-  const existing = await findByKey(key);
+  // S03 simulates a slow query, so its delay happens inside the database span, as a real one would.
+  const existing = await withSpan("db.query orders.lookup", async () => {
+    if (scenario === "S03_slow_query") await sleep(1500);
+    return findByKey(key);
+  }, { "db.system": "postgresql" });
   if (existing) return Response.json({ order: publicView(existing, session?.userId ?? null), replayed: true });
 
   const { lines, totalCents } = detail(await readCart());
@@ -33,7 +37,7 @@ export const POST = instrument("/api/checkout", async (req, _ctx, requestId) => 
 
   let payment;
   try {
-    payment = await authorize(totalCents);
+    payment = await withSpan("payment.authorize", () => authorize(totalCents), { "payment.provider": "simulator" });
   } catch (err) {
     if (err instanceof PaymentTimeout) {
       log("error", "payment_timeout", { request_id: requestId, total_cents: totalCents, error: err.message });
@@ -46,7 +50,8 @@ export const POST = instrument("/api/checkout", async (req, _ctx, requestId) => 
     return Response.json({ error: "payment_declined" }, { status: 402 });
   }
 
-  const { order, created } = await saveOrder(key, lines, totalCents, payment.authorizationId, session?.userId ?? null, shipping);
+  const { order, created } = await withSpan("db.query orders.insert",
+    () => saveOrder(key, lines, totalCents, payment.authorizationId, session?.userId ?? null, shipping), { "db.system": "postgresql" });
   await writeCart([]);
   const view = publicView(order, session?.userId ?? null);
   if (!created) return Response.json({ order: view, replayed: true });

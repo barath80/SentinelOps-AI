@@ -142,3 +142,57 @@ def test_diagnostic_endpoints_require_auth_and_404(client):
     assert client.post("/api/v1/incidents/x/investigate").status_code == 401
     assert client.post("/api/v1/incidents/nope/investigate", json={}, headers=AUTH).status_code == 404
     assert client.post("/api/v1/incidents/nope/diagnostics", json={"test_id": "compare_request_rate_to_baseline"}, headers=AUTH).status_code == 404
+
+
+# ---- traces as evidence ------------------------------------------------------------------------
+
+def traced(events, child_name, child_share, status_code=0):
+    """Give each recent checkout line a trace id plus a root span and one child span."""
+    from datetime import datetime as dt
+    spans = []
+    for i, e in enumerate(events):
+        if e["route"] != "/api/checkout" or e["status"] < 200:
+            continue
+        tid = f"{i:032x}"
+        e["trace_id"] = tid
+        start = int(dt.fromisoformat(e["event_time"]).timestamp() * 1e9)
+        dur = int(e["duration_ms"] * 1e6)
+        spans.append({"traceId": tid, "spanId": f"{i:016x}", "name": "POST /api/checkout", "serviceName": "shop-web",
+                      "startTimeUnixNano": start, "endTimeUnixNano": start + dur, "status": {"code": status_code}})
+        spans.append({"traceId": tid, "spanId": f"{i + 1:015x}f", "parentSpanId": f"{i:016x}", "name": child_name,
+                      "serviceName": "shop-web", "startTimeUnixNano": start, "endTimeUnixNano": start + int(dur * child_share),
+                      "status": {"code": status_code}})
+    return events, spans
+
+
+def ingest_spans(client, spans):
+    r = client.post("/api/v1/telemetry/events?adapter=otel_span", json={"events": spans}, headers=AUTH)
+    assert r.json()["rejected"] == 0, r.text
+
+
+def test_traces_make_the_slow_dependency_testable(client):
+    events, spans = traced(recent(201, 1520), "db.query orders.lookup", 0.9)
+    ingest_spans(client, spans)
+    [inc] = run(client, baseline() + events)
+    out = investigate(client, inc["id"])
+    assert out["report"]["stop_reason"] == "leader_survived_falsification"
+    run_ = next(r for r in out["incident"]["diagnostic_runs"] if r["test_id"] == "inspect_db_pool_wait_and_query_duration")
+    assert run_["outcome"] == "supports" and run_["details"]["median_share_in_db_spans"] >= 0.8
+
+
+def test_traces_can_overturn_the_slow_dependency(client):
+    events, spans = traced(recent(201, 1520), "render.template", 0.95)  # the time is not in the database
+    ingest_spans(client, spans)
+    [inc] = run(client, baseline() + events)
+    out = investigate(client, inc["id"])
+    assert hyp(out["incident"], "slow_dependency")["status"] == "falsified"
+
+
+def test_payment_failures_are_matched_through_traces_when_logs_are_missing(client):
+    events, spans = traced(recent(504, 3004), "payment.authorize", 0.99, status_code=2)
+    ingest_spans(client, spans)
+    a_few = [line(NOW - timedelta(seconds=95), "/api/checkout", 504, 3004, "v1", "payment_timeout") for _ in range(1)]
+    [inc] = run(client, baseline() + events, a_few)
+    res = client.post(f"/api/v1/incidents/{inc['id']}/diagnostics", json={"test_id": "inspect_payment_provider_status_and_spans"}, headers=AUTH).json()
+    r = next(x for x in res["diagnostic_runs"] if x["test_id"] == "inspect_payment_provider_status_and_spans")
+    assert r["outcome"] == "supports" and r["details"]["matched_by_trace"] >= 8 and r["details"]["matched_by_log"] == 0

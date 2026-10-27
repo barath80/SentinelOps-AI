@@ -171,7 +171,7 @@ def build_hypotheses(c: IncidentCandidate, f: Features) -> list[Hypothesis]:
         ev.append(EvidenceItem("contradicts", 0.8,
             f"The dominant symptom is errors ({rec_err:.0%} of requests), not slowness alone.", _ids(f.bad), _fp("errors-dominate", window)))
     ev.append(EvidenceItem("missing", 0.5,
-        "No database or dependency metrics (query duration, pool wait, connection counts) are ingested, so a slow dependency cannot be confirmed from request logs alone.",
+        "Request logs alone cannot confirm a slow dependency: it needs database metrics or request traces (the dependency diagnostic checks them).",
         [], _fp("missing-db-metrics")))
     out.append(Hypothesis("slow_dependency", "A slow dependency (for example a database query) is adding latency", ev,
         temporal=0.5 if slow_anom else 0.0, dependency=0.5, next_test_id="inspect_db_pool_wait_and_query_duration"))

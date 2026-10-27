@@ -5,9 +5,10 @@ Adapters never invent data: anything they cannot map goes into `attributes` unch
 """
 import hashlib
 import json
+import math
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from .schemas import NormalizedEvent
@@ -57,7 +58,7 @@ def shop_json(raw: dict[str, Any], tenant_id: str, ingest_time: datetime) -> Nor
         if key not in raw:
             raise ValueError(f"missing field: {key}")
     env = raw.get("environment")
-    known = {"event_time", "service_name", "environment", "level", "message", "request_id"}
+    known = {"event_time", "service_name", "environment", "level", "message", "request_id", "trace_id"}
     return NormalizedEvent(
         event_id=_event_id(raw),
         tenant_id=tenant_id,
@@ -67,6 +68,7 @@ def shop_json(raw: dict[str, Any], tenant_id: str, ingest_time: datetime) -> Nor
         event_time=_parse_time(raw["event_time"]),
         ingest_time=ingest_time,
         request_id=raw.get("request_id"),
+        trace_id=raw.get("trace_id") if isinstance(raw.get("trace_id"), str) else None,
         severity=_severity(raw.get("level")),
         source_ref=f"{raw['service_name']}:{raw.get('request_id', 'no-request')}:{raw['message']}",
         attributes={"message": raw["message"], **{k: v for k, v in raw.items() if k not in known}},
@@ -124,5 +126,77 @@ def text_line(raw: dict[str, Any], tenant_id: str, ingest_time: datetime) -> Nor
     )
 
 
+_HEX = re.compile(r"^[0-9a-f]{8,64}$")
+_SPAN_STATUS = {0: "unset", 1: "ok", 2: "error", "STATUS_CODE_UNSET": "unset", "STATUS_CODE_OK": "ok",
+                "STATUS_CODE_ERROR": "error", "UNSET": "unset", "OK": "ok", "ERROR": "error"}
+_MAX_ATTRS = 20
+
+
+def _nanos(value: Any, name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer number of nanoseconds")
+    try:
+        n = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer number of nanoseconds") from exc
+    if n <= 0:
+        raise ValueError(f"{name} must be positive")
+    return n
+
+
+def otel_span(raw: dict[str, Any], tenant_id: str, ingest_time: datetime) -> NormalizedEvent:
+    """One span in OpenTelemetry's JSON shape (the fields of an OTLP span, flattened):
+    {"traceId", "spanId", "parentSpanId"?, "name", "serviceName", "startTimeUnixNano",
+     "endTimeUnixNano", "status": {"code"}, "attributes": {...}}"""
+    trace_id, span_id = str(raw.get("traceId", "")).lower(), str(raw.get("spanId", "")).lower()
+    if not _HEX.match(trace_id) or not _HEX.match(span_id):
+        raise ValueError("traceId and spanId must be hex strings")
+    name, service = raw.get("name"), raw.get("serviceName")
+    if not isinstance(name, str) or not name or not isinstance(service, str) or not service:
+        raise ValueError("name and serviceName are required")
+    start, end = _nanos(raw.get("startTimeUnixNano"), "startTimeUnixNano"), _nanos(raw.get("endTimeUnixNano"), "endTimeUnixNano")
+    if end < start:
+        raise ValueError("span ends before it starts")
+    status_raw = raw.get("status") if isinstance(raw.get("status"), dict) else {}
+    status = _SPAN_STATUS.get(status_raw.get("code", 0), "unset")
+    attrs = raw.get("attributes") if isinstance(raw.get("attributes"), dict) else {}
+    parent = str(raw.get("parentSpanId") or "").lower() or None
+    return NormalizedEvent(
+        event_id=uuid.uuid5(_NAMESPACE, f"span:{trace_id}:{span_id}"),
+        tenant_id=tenant_id,
+        environment=raw.get("environment") if raw.get("environment") in _ENVIRONMENTS else "demo",
+        service_name=service[:100],
+        event_type="trace",
+        event_time=datetime.fromtimestamp(start / 1e9, tz=timezone.utc),
+        ingest_time=ingest_time,
+        trace_id=trace_id,
+        severity="error" if status == "error" else None,
+        source_ref=f"trace:{trace_id}/{span_id}",
+        attributes={"span_id": span_id, "parent_span_id": parent, "name": name[:120], "status": status,
+                    "duration_ms": round((end - start) / 1e6, 3),
+                    **{str(k)[:60]: v for k, v in list(attrs.items())[:_MAX_ATTRS] if isinstance(v, (str, int, float, bool))}},
+    )
+
+
+def metric_point(raw: dict[str, Any], tenant_id: str, ingest_time: datetime) -> NormalizedEvent:
+    """One metric sample: {"name", "value", "timestamp", "serviceName", "labels"?}."""
+    name, service, value = raw.get("name"), raw.get("serviceName"), raw.get("value")
+    if not isinstance(name, str) or not re.match(r"^[a-zA-Z_:][a-zA-Z0-9_:.]{0,99}$", name):
+        raise ValueError("name must be a metric name like db_query_duration_ms")
+    if not isinstance(service, str) or not service:
+        raise ValueError("serviceName is required")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError("value must be a finite number")
+    labels = raw.get("labels") if isinstance(raw.get("labels"), dict) else {}
+    labels = {str(k)[:60]: str(v)[:120] for k, v in list(labels.items())[:_MAX_ATTRS]}
+    return NormalizedEvent(
+        event_id=_event_id(raw), tenant_id=tenant_id,
+        environment=raw.get("environment") if raw.get("environment") in _ENVIRONMENTS else "demo",
+        service_name=service[:100], event_type="metric", event_time=_parse_time(raw.get("timestamp")), ingest_time=ingest_time,
+        source_ref=f"metric:{name}", attributes={"metric_name": name, "value": float(value), "labels": labels},
+    )
+
+
 Adapter = Callable[[dict[str, Any], str, datetime], NormalizedEvent]
-ADAPTERS: dict[str, Adapter] = {"normalized": normalized, "shop_json": shop_json, "text": text_line}
+ADAPTERS: dict[str, Adapter] = {"normalized": normalized, "shop_json": shop_json, "text": text_line,
+                                "otel_span": otel_span, "metric": metric_point}

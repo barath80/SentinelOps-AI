@@ -170,6 +170,18 @@ class VerificationRow(Base):
     predicates: Mapped[list] = mapped_column(JSON)
 
 
+class IncidentLabelRow(Base):
+    """A person's judgement of an incident's true cause: ground truth for evaluating the models."""
+
+    __tablename__ = "incident_labels"
+
+    incident_id: Mapped[str] = mapped_column(ForeignKey("incidents.id", ondelete="CASCADE"), primary_key=True)
+    label: Mapped[str] = mapped_column(String(40))
+    labeled_by: Mapped[str] = mapped_column(String(100))
+    note: Mapped[str] = mapped_column(Text, default="")
+    labeled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class PreventionArtifactRow(Base):
     """A proposed regression test / alert rule / runbook change. Text only: never executed or merged."""
 

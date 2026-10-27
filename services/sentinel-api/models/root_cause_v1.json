@@ -5,28 +5,28 @@
     "max_depth": 12,
     "min_samples_leaf": 1
   },
-  "calibration": "sigmoid, 5-fold",
+  "calibration": "isotonic, 5-fold",
   "calibration_comparison": [
     {
       "probabilities": "uncalibrated",
-      "log_loss": 0.0612,
+      "log_loss": 0.06,
       "brier": 0.0277,
-      "macro_f1": 0.961
+      "macro_f1": 0.9618
     },
     {
       "probabilities": "isotonic",
-      "log_loss": 0.1371,
-      "brier": 0.0249,
-      "macro_f1": 0.9633
+      "log_loss": 0.0634,
+      "brier": 0.0235,
+      "macro_f1": 0.9613
     },
     {
       "probabilities": "sigmoid",
-      "log_loss": 0.0678,
-      "brier": 0.0267,
-      "macro_f1": 0.9626
+      "log_loss": 0.0657,
+      "brier": 0.0276,
+      "macro_f1": 0.9599
     }
   ],
-  "tau": 0.88,
+  "tau": 0.71,
   "target_precision": 0.99,
   "features": [
     "err_recent",
@@ -58,59 +58,59 @@
   "cv": [
     {
       "model": "random_forest",
-      "cv_macro_f1": 0.9553933189298615,
-      "cv_std": 0.01045898947479855,
-      "fit_seconds": 28.4
+      "cv_macro_f1": 0.9638392518730938,
+      "cv_std": 0.006932358925336162,
+      "fit_seconds": 15.5
     },
     {
       "model": "gradient_boosting",
-      "cv_macro_f1": 0.9511639507781485,
-      "cv_std": 0.006454899322874763,
-      "fit_seconds": 85.1
+      "cv_macro_f1": 0.961313598501636,
+      "cv_std": 0.006193364554057786,
+      "fit_seconds": 54.8
     },
     {
       "model": "logistic_regression",
-      "cv_macro_f1": 0.9302467612727963,
-      "cv_std": 0.00686391349734359,
-      "fit_seconds": 9.4
+      "cv_macro_f1": 0.9264638617802061,
+      "cv_std": 0.014752282402140134,
+      "fit_seconds": 9.8
     }
   ],
   "test_results": {
     "A: in-distribution | learned model": {
-      "n": 1925,
-      "exact_accuracy": 0.979,
-      "macro_f1": 0.958,
-      "decision_accuracy": 0.985,
-      "incorrect_intervention_rate": 0.003,
-      "missed_actionable_rate": 0.01,
-      "coverage_named": 0.748
+      "n": 1865,
+      "exact_accuracy": 0.976,
+      "macro_f1": 0.946,
+      "decision_accuracy": 0.986,
+      "incorrect_intervention_rate": 0.0,
+      "missed_actionable_rate": 0.014,
+      "coverage_named": 0.743
     },
     "A: in-distribution | rule engine": {
-      "n": 1925,
-      "exact_accuracy": 0.737,
-      "macro_f1": 0.62,
-      "decision_accuracy": 0.756,
-      "incorrect_intervention_rate": 0.089,
-      "missed_actionable_rate": 0.09,
-      "coverage_named": 0.674
+      "n": 1865,
+      "exact_accuracy": 0.734,
+      "macro_f1": 0.616,
+      "decision_accuracy": 0.749,
+      "incorrect_intervention_rate": 0.093,
+      "missed_actionable_rate": 0.091,
+      "coverage_named": 0.669
     },
     "B: shifted | learned model": {
-      "n": 1965,
-      "exact_accuracy": 0.832,
-      "macro_f1": 0.795,
-      "decision_accuracy": 0.879,
-      "incorrect_intervention_rate": 0.01,
+      "n": 1793,
+      "exact_accuracy": 0.863,
+      "macro_f1": 0.828,
+      "decision_accuracy": 0.907,
+      "incorrect_intervention_rate": 0.009,
       "missed_actionable_rate": 0.071,
-      "coverage_named": 0.626
+      "coverage_named": 0.63
     },
     "B: shifted | rule engine": {
-      "n": 1965,
-      "exact_accuracy": 0.579,
-      "macro_f1": 0.491,
-      "decision_accuracy": 0.615,
-      "incorrect_intervention_rate": 0.178,
-      "missed_actionable_rate": 0.113,
-      "coverage_named": 0.644
+      "n": 1793,
+      "exact_accuracy": 0.559,
+      "macro_f1": 0.48,
+      "decision_accuracy": 0.601,
+      "incorrect_intervention_rate": 0.195,
+      "missed_actionable_rate": 0.108,
+      "coverage_named": 0.632
     }
   },
   "data": {
@@ -127,9 +127,9 @@
       200000,
       200400
     ],
-    "train_rows": 7178,
-    "testA_rows": 1925,
-    "testB_rows": 1965
+    "train_rows": 7007,
+    "testA_rows": 1865,
+    "testB_rows": 1793
   },
   "environment": {
     "python": "3.12.10",
