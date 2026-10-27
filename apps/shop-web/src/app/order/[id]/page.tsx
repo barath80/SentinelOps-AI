@@ -1,14 +1,31 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Suspense } from "react";
+import { cache } from "react";
 import OrderLines from "@/components/OrderLines";
 import { getOrder } from "@/lib/orders";
 import { formatPrice } from "@/lib/products";
 import { getSession } from "@/lib/session";
 
-async function Order({ params }: Pick<PageProps<"/order/[id]">, "params">) {
+// Deduped per request: generateMetadata and the page body both need these, and this way the DB
+// is only hit once.
+const loadOrder = cache(getOrder);
+const loadSession = cache(getSession);
+
+// Deliberately no loading.tsx for this route: any Suspense boundary around it (explicit, or
+// implicit via loading.tsx) makes Next flush a 200 shell before notFound() resolves, so an
+// unknown or inaccessible order id could never actually produce a real 404. generateMetadata
+// always resolves before streaming starts, so the existence/ownership check belongs here too.
+export async function generateMetadata({ params }: PageProps<"/order/[id]">): Promise<Metadata> {
   const { id } = await params;
-  const [order, session] = await Promise.all([getOrder(id), getSession()]);
+  const [order, session] = await Promise.all([loadOrder(id), loadSession()]);
+  if (!order || (order.userId && order.userId !== session?.userId)) notFound();
+  return { title: `Order ${order.id}` };
+}
+
+export default async function OrderPage({ params }: PageProps<"/order/[id]">) {
+  const { id } = await params;
+  const [order, session] = await Promise.all([loadOrder(id), loadSession()]);
   // Another customer's order looks exactly like a missing one.
   if (!order || (order.userId && order.userId !== session?.userId)) notFound();
   const own = !!order.userId && order.userId === session?.userId;
@@ -30,13 +47,5 @@ async function Order({ params }: Pick<PageProps<"/order/[id]">, "params">) {
         <Link href="/" className="text-sky-700 hover:underline">Continue shopping</Link>
       </div>
     </div>
-  );
-}
-
-export default function OrderPage({ params }: PageProps<"/order/[id]">) {
-  return (
-    <Suspense fallback={<p>Loading…</p>}>
-      <Order params={params} />
-    </Suspense>
   );
 }

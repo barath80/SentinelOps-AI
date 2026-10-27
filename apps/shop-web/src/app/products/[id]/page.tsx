@@ -1,6 +1,6 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Suspense } from "react";
 import BuyBox from "@/components/BuyBox";
 import ProductCard from "@/components/ProductCard";
 import Stars from "@/components/Stars";
@@ -13,7 +13,18 @@ function distribution(p: Product): number[] {
   return weights.map((w) => Math.round((w / total) * 100));
 }
 
-async function ProductView({ params }: Pick<PageProps<"/products/[id]">, "params">) {
+// Deliberately no loading.tsx for this route: any Suspense boundary around it (explicit, or
+// implicit via loading.tsx) makes Next flush a 200 shell before notFound() resolves, so an
+// unknown id could never actually produce a real 404. generateMetadata always resolves before
+// streaming starts, so the existence check belongs here too.
+export async function generateMetadata({ params }: PageProps<"/products/[id]">): Promise<Metadata> {
+  const { id } = await params;
+  const p = getProduct(id);
+  if (!p) notFound();
+  return { title: p.name };
+}
+
+export default async function ProductPage({ params }: PageProps<"/products/[id]">) {
   const { id } = await params;
   const p = getProduct(id);
   if (!p) notFound();
@@ -74,13 +85,5 @@ async function ProductView({ params }: Pick<PageProps<"/products/[id]">, "params
         </ul>
       </section>
     </>
-  );
-}
-
-export default function ProductPage({ params }: PageProps<"/products/[id]">) {
-  return (
-    <Suspense fallback={<p>Loading…</p>}>
-      <ProductView params={params} />
-    </Suspense>
   );
 }
