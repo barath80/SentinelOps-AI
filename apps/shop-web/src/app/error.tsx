@@ -1,11 +1,12 @@
 "use client";
 import Link from "next/link";
 import { useEffect } from "react";
-import { log } from "@/lib/log";
 
 export default function Error({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
   useEffect(() => {
-    log("error", "client_error_boundary", { error: error.message, digest: error.digest });
+    // Plain console.error, not lib/log: that module is server-oriented (it also pulls in
+    // lib/faults.ts, which imports node:async_hooks) and shouldn't be bundled for the browser.
+    console.error("client_error_boundary", { error: error.message, digest: error.digest });
   }, [error]);
 
   return (
