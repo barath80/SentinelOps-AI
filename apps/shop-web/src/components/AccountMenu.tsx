@@ -31,6 +31,17 @@ export default function AccountMenu({ name }: { name: string }) {
               Your orders
             </Link>
           </DropdownMenu.Item>
+          <DropdownMenu.Item asChild>
+            <Link href="/wishlist" className="cursor-pointer rounded px-2 py-1.5 text-sm outline-none hover:bg-zinc-100 focus:bg-zinc-100">
+              Your wishlist
+            </Link>
+          </DropdownMenu.Item>
+          <DropdownMenu.Item asChild>
+            <Link href="/account" className="cursor-pointer rounded px-2 py-1.5 text-sm outline-none hover:bg-zinc-100 focus:bg-zinc-100">
+              Account settings
+            </Link>
+          </DropdownMenu.Item>
+          <DropdownMenu.Separator className="my-1 h-px bg-zinc-200" />
           <DropdownMenu.Item
             onSelect={signOut}
             className="cursor-pointer rounded px-2 py-1.5 text-sm outline-none hover:bg-zinc-100 focus:bg-zinc-100"

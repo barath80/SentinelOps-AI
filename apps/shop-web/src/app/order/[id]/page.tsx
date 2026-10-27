@@ -29,7 +29,9 @@ export default async function OrderPage({ params }: PageProps<"/order/[id]">) {
   const [order, session] = await Promise.all([loadOrder(id), loadSession()]);
   // Another customer's order looks exactly like a missing one.
   if (!order || (order.userId && order.userId !== session?.userId)) notFound();
-  const own = !!order.userId && order.userId === session?.userId;
+  // A guest order has no owner to restrict it to: holding the unguessable order id is itself
+  // the access credential, so the guest who just placed it (or anyone with the link) sees it.
+  const own = order.userId === null || order.userId === session?.userId;
   return (
     <div className="mx-auto max-w-3xl rounded-lg bg-white p-6 dark:bg-zinc-900">
       <p className="text-lg font-semibold text-emerald-700 dark:text-emerald-400">✓ Order placed, thank you!</p>

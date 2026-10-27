@@ -1,7 +1,9 @@
 import type { DetailedLine } from "./cart";
 import { db } from "./db";
 
-export type Shipping = { fullName: string; line1: string; city: string; postalCode: string; country: string };
+// email is optional: signed-in orders don't need it (the account already has one), but a guest
+// order has no account to fall back on, so the checkout UI collects it from guests.
+export type Shipping = { fullName: string; line1: string; city: string; postalCode: string; country: string; email?: string };
 
 export type OrderLine = { id: string; name: string; qty: number; lineCents: number; color?: string; colorHex?: string; art?: string };
 
@@ -47,12 +49,16 @@ export function validateShipping(s: unknown): Shipping | null | "invalid" {
   if (s === undefined || s === null) return null;
   if (typeof s !== "object") return "invalid";
   const o = s as Record<string, unknown>;
-  const keys: (keyof Shipping)[] = ["fullName", "line1", "city", "postalCode", "country"];
+  const keys: (keyof Omit<Shipping, "email">)[] = ["fullName", "line1", "city", "postalCode", "country"];
   const out = {} as Shipping;
   for (const k of keys) {
     const v = o[k];
     if (typeof v !== "string" || !v.trim() || v.length > 120) return "invalid";
     out[k] = v.trim();
+  }
+  if (o.email !== undefined) {
+    if (typeof o.email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(o.email.trim()) || o.email.length > 254) return "invalid";
+    out.email = o.email.trim();
   }
   return out;
 }
@@ -100,8 +106,10 @@ export async function saveOrder(
   return { order: existing, created: false };
 }
 
-// What a caller may see: guest orders and other people's orders never expose the address.
+// What a caller may see. A signed-in order's address is only shown to its owner. A guest order
+// has no owner to restrict it to: the unguessable order id is itself the access credential, so
+// anyone who holds it (the guest who just placed it, or a link they're shown) can see it.
 export function publicView(o: Order, viewerId: string | null) {
-  const own = o.userId !== null && o.userId === viewerId;
+  const own = o.userId === null || o.userId === viewerId;
   return { ...o, shipping: own ? o.shipping : null, userId: undefined, idempotencyKey: undefined };
 }

@@ -6,6 +6,8 @@ import ProductCard from "@/components/ProductCard";
 import Stars from "@/components/Stars";
 import { CATEGORIES, formatCount, getProduct, PRODUCTS, type Product } from "@/lib/products";
 import { buildBreadcrumbJsonLd, buildProductJsonLd, productMetaDescription, siteUrl } from "@/lib/seo";
+import { getSession } from "@/lib/session";
+import { isInWishlist } from "@/lib/wishlist";
 
 // Share of reviews per star level, derived from the average so the bars agree with the rating.
 function distribution(p: Product): number[] {
@@ -38,6 +40,8 @@ export default async function ProductPage({ params }: PageProps<"/products/[id]"
   const category = CATEGORIES.find((c) => c.id === p.category)!;
   const related = PRODUCTS.filter((x) => x.category === p.category && x.id !== p.id).slice(0, 6);
   const dist = distribution(p);
+  const session = await getSession();
+  const wishlisted = session ? await isInWishlist(session.userId, p.id) : false;
   const base = siteUrl();
   const productUrl = `${base}/products/${p.id}`;
   const breadcrumbJsonLd = buildBreadcrumbJsonLd([
@@ -55,7 +59,7 @@ export default async function ProductPage({ params }: PageProps<"/products/[id]"
         <Link href={`/search?category=${category.id}`} className="hover:underline">{category.name}</Link> ›{" "}
         <span>{p.brand}</span>
       </nav>
-      <BuyBox p={p} />
+      <BuyBox p={p} wishlisted={wishlisted} signedIn={!!session} />
 
       <section className="mt-8 grid gap-6 lg:grid-cols-2">
         <div className="rounded-lg bg-white p-5 dark:bg-zinc-900">

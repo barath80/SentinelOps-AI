@@ -67,6 +67,9 @@ export default function AuthForm({ mode, next, error, google }: { mode: "login" 
               autoComplete={mode === "signup" ? "new-password" : "current-password"} className="mt-1 w-full rounded border border-zinc-300 bg-white px-3 py-2 dark:bg-zinc-800" />
           </label>
           {mode === "signup" && <p className="text-xs text-zinc-500">At least 8 characters.</p>}
+          {mode === "login" && (
+            <p className="text-right text-sm"><Link href="/forgot-password" className="text-sky-700 hover:underline">Forgot password?</Link></p>
+          )}
           {message && <p role="alert" className="text-sm text-red-600">{message}</p>}
           <button disabled={busy} className="w-full rounded-md bg-amber-400 py-2 font-semibold text-zinc-900 hover:bg-amber-300 disabled:opacity-60">
             {busy ? "Please wait…" : mode === "login" ? "Sign in" : "Create your account"}

@@ -12,18 +12,46 @@ const dummy = () => (dummyHash ??= bcrypt.hashSync("placeholder-for-timing-only"
 
 export const normalizeEmail = (e: string) => e.trim().toLowerCase();
 
+export function validatePassword(password: unknown): string | null {
+  if (typeof password !== "string" || password.length < 8) return "Use a password of at least 8 characters.";
+  if (new TextEncoder().encode(password).length > 72) return "Use a password of at most 72 bytes.";
+  return null;
+}
+
 export function validateSignup(input: { email?: unknown; password?: unknown; name?: unknown }): string | null {
   if (typeof input.email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.email.trim()) || input.email.length > 254)
     return "Enter a valid email address.";
   if (typeof input.name !== "string" || !input.name.trim() || input.name.length > 60) return "Enter your name (up to 60 characters).";
-  if (typeof input.password !== "string" || input.password.length < 8) return "Use a password of at least 8 characters.";
-  if (new TextEncoder().encode(input.password).length > 72) return "Use a password of at most 72 bytes.";
-  return null;
+  return validatePassword(input.password);
 }
 
 export async function findUserByEmail(email: string): Promise<User | null> {
   const rows = (await db()`SELECT * FROM users WHERE email = ${normalizeEmail(email)}`) as Row[];
   return rows[0] ? toUser(rows[0]) : null;
+}
+
+export async function findUserById(id: string): Promise<User | null> {
+  const rows = (await db()`SELECT * FROM users WHERE id = ${id}`) as Row[];
+  return rows[0] ? toUser(rows[0]) : null;
+}
+
+export async function updateProfile(userId: string, name: string, email: string): Promise<User | "email_taken"> {
+  const normalized = normalizeEmail(email);
+  const existing = await findUserByEmail(normalized);
+  if (existing && existing.id !== userId) return "email_taken";
+  const rows = (await db()`
+    UPDATE users SET name = ${name.trim()}, email = ${normalized} WHERE id = ${userId} RETURNING *`) as Row[];
+  return toUser(rows[0]);
+}
+
+export async function changePassword(userId: string, currentPassword: string, newPassword: string): Promise<boolean> {
+  const user = await findUserById(userId);
+  if (!user || !user.passwordHash) return false;
+  const ok = await bcrypt.compare(currentPassword, user.passwordHash);
+  if (!ok) return false;
+  const hash = await bcrypt.hash(newPassword, 10);
+  await db()`UPDATE users SET password_hash = ${hash} WHERE id = ${userId}`;
+  return true;
 }
 
 export async function createPasswordUser(email: string, name: string, password: string): Promise<User | "exists"> {

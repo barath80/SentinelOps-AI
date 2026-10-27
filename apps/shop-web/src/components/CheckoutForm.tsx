@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import CheckoutSteps from "./CheckoutSteps";
@@ -18,7 +19,7 @@ const FIELDS: { key: string; label: string; autoComplete: string }[] = [
   { key: "country", label: "Country", autoComplete: "country-name" },
 ];
 
-export default function CheckoutForm({ defaultName }: { defaultName: string }) {
+export default function CheckoutForm({ defaultName, signedIn }: { defaultName: string; signedIn: boolean }) {
   const router = useRouter();
   const [cart, setCart] = useState<CartView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -36,7 +37,8 @@ export default function CheckoutForm({ defaultName }: { defaultName: string }) {
     setBusy(true);
     setError(null);
     idemKey.current ??= crypto.randomUUID();
-    const shipping = Object.fromEntries(FIELDS.map((f) => [f.key, String(form.get(f.key) ?? "")]));
+    const shipping: Record<string, string> = Object.fromEntries(FIELDS.map((f) => [f.key, String(form.get(f.key) ?? "")]));
+    if (!signedIn) shipping.email = String(form.get("email") ?? "");
     const res = await fetch("/api/checkout", {
       method: "POST",
       headers: { "idempotency-key": idemKey.current, "content-type": "application/json" },
@@ -86,8 +88,23 @@ export default function CheckoutForm({ defaultName }: { defaultName: string }) {
         <div className="mt-3">
           <CheckoutSteps current={error ? 1 : busy ? 2 : 1} />
         </div>
+        {!signedIn && (
+          <p className="mt-4 rounded bg-sky-50 p-3 text-sm text-sky-900 dark:bg-sky-950 dark:text-sky-100">
+            Checking out as a guest.{" "}
+            <Link href={`/login?next=${encodeURIComponent("/checkout")}`} className="font-semibold underline">Sign in</Link> or{" "}
+            <Link href={`/signup?next=${encodeURIComponent("/checkout")}`} className="font-semibold underline">create an account</Link>{" "}
+            for faster checkout next time.
+          </p>
+        )}
         <h2 className="mt-5 font-semibold">1. Delivery address</h2>
         <div className="mt-2 grid gap-3 sm:grid-cols-2">
+          {!signedIn && (
+            <label className="text-sm sm:col-span-2">
+              Email (for your order confirmation)
+              <input name="email" type="email" required maxLength={254} autoComplete="email"
+                className="mt-1 w-full rounded border border-zinc-300 bg-white px-3 py-2 dark:bg-zinc-800" />
+            </label>
+          )}
           {FIELDS.map((f) => (
             <label key={f.key} className={`text-sm ${f.key === "line1" ? "sm:col-span-2" : ""}`}>
               {f.label}
