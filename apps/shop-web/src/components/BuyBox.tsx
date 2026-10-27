@@ -97,6 +97,20 @@ export default function BuyBox({ p }: { p: Product }) {
         {state === "added" && <Link href="/cart" className="mt-2 block text-center text-sm text-sky-700 hover:underline">Go to cart</Link>}
         <p className="mt-3 text-xs text-zinc-500">Ships from and sold by ShopSphere. Simulated checkout: no payment is taken.</p>
       </aside>
+
+      {p.stock > 0 && (
+        <div className="fixed inset-x-0 bottom-0 z-20 flex items-center gap-3 border-t border-zinc-200 bg-white p-3 shadow-[0_-2px_8px_rgba(0,0,0,0.08)] lg:hidden dark:border-zinc-800 dark:bg-zinc-900">
+          <span className="text-lg font-semibold">{formatPrice(p.priceCents)}</span>
+          <button
+            type="button"
+            disabled={state === "busy"}
+            onClick={() => add()}
+            className="flex-1 rounded-full bg-amber-400 py-2 font-semibold text-zinc-900 hover:bg-amber-300 disabled:opacity-60"
+          >
+            {state === "added" ? "Added ✓" : "Add to cart"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

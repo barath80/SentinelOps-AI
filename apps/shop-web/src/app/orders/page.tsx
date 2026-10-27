@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
+import EmptyState from "@/components/EmptyState";
 import OrderLines from "@/components/OrderLines";
 import { listOrders } from "@/lib/orders";
 import { formatPrice } from "@/lib/products";
@@ -15,7 +16,13 @@ async function Orders() {
       <h1 className="text-2xl font-bold">Your orders</h1>
       <p className="text-sm text-zinc-500">{orders.length} order{orders.length === 1 ? "" : "s"} placed</p>
       {orders.length === 0 && (
-        <p className="mt-4 rounded-lg bg-white p-6 dark:bg-zinc-900">No orders yet. <Link href="/" className="text-sky-700 hover:underline">Start shopping</Link></p>
+        <div className="mt-4">
+          <EmptyState
+            title="No orders yet"
+            message="When you place an order, it'll show up here."
+            action={{ href: "/", label: "Start shopping" }}
+          />
+        </div>
       )}
       <ul className="mt-4 space-y-4">
         {orders.map((o) => (

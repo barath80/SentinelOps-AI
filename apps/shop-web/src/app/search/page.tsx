@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Suspense } from "react";
+import EmptyState from "@/components/EmptyState";
 import ProductCard from "@/components/ProductCard";
 import { CATEGORIES, searchProducts, type SortKey } from "@/lib/products";
 
@@ -92,9 +93,12 @@ async function Results({ searchParams }: Pick<PageProps<"/search">, "searchParam
           </div>
         </div>
         {shown.length === 0 ? (
-          <div className="mt-6 rounded-md bg-white p-6 dark:bg-zinc-900">
-            <p className="font-semibold">No products match these filters.</p>
-            <Link href="/search" className="text-sky-700 hover:underline">Clear all filters</Link>
+          <div className="mt-6">
+            <EmptyState
+              title="No products match these filters"
+              message="Try removing a filter or searching for something else."
+              action={{ href: "/search", label: "Clear all filters" }}
+            />
           </div>
         ) : (
           <ul className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">

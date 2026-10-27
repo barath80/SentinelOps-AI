@@ -1,8 +1,10 @@
 "use client";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import CheckoutSteps from "./CheckoutSteps";
+import EmptyState from "./EmptyState";
 import ProductArt from "./ProductArt";
+import { Skeleton } from "./Skeleton";
 import { formatPrice, type ArtKind } from "@/lib/products";
 
 type Line = { product: { id: string; name: string; art: ArtKind }; color: { name: string; hex: string }; qty: number; lineCents: number };
@@ -55,14 +57,36 @@ export default function CheckoutForm({ defaultName }: { defaultName: string }) {
     );
   }
 
-  if (!cart) return <p>Loading…</p>;
-  if (cart.lines.length === 0) return <p>Your cart is empty. <Link href="/" className="text-sky-700 hover:underline">Continue shopping</Link></p>;
+  if (!cart) {
+    return (
+      <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+        <div className="space-y-3 rounded-lg bg-white p-5 dark:bg-zinc-900">
+          <Skeleton className="h-6 w-32" />
+          <Skeleton className="h-24 w-full" />
+          <Skeleton className="h-24 w-full" />
+        </div>
+        <Skeleton className="h-48 w-full rounded-lg" />
+      </div>
+    );
+  }
+  if (cart.lines.length === 0) {
+    return (
+      <EmptyState
+        title="Your cart is empty"
+        message="Add something to your cart before checking out."
+        action={{ href: "/", label: "Continue shopping" }}
+      />
+    );
+  }
 
   return (
     <form action={place} className="grid gap-6 lg:grid-cols-[1fr_320px]">
       <section className="rounded-lg bg-white p-5 dark:bg-zinc-900">
         <h1 className="text-2xl font-bold">Checkout</h1>
-        <h2 className="mt-4 font-semibold">1. Delivery address</h2>
+        <div className="mt-3">
+          <CheckoutSteps current={error ? 1 : busy ? 2 : 1} />
+        </div>
+        <h2 className="mt-5 font-semibold">1. Delivery address</h2>
         <div className="mt-2 grid gap-3 sm:grid-cols-2">
           {FIELDS.map((f) => (
             <label key={f.key} className={`text-sm ${f.key === "line1" ? "sm:col-span-2" : ""}`}>

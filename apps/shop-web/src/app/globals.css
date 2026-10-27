@@ -3,6 +3,15 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+
+  /* Semantic tokens layered on the zinc/indigo/amber palette already used throughout the app. */
+  --color-brand: #4338ca; /* indigo-700 */
+  --color-brand-foreground: #ffffff;
+  --color-accent: #fbbf24; /* amber-400 */
+  --color-accent-foreground: #1c1917;
+  --color-success: #15803d; /* emerald-700 */
+  --color-danger: #dc2626; /* red-600 */
+  --color-warning: #ea580c; /* orange-600 */
 }
 
 @theme inline {
@@ -16,11 +25,44 @@
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
+    --color-success: #34d399; /* emerald-400 */
+    --color-danger: #f87171; /* red-400 */
+    --color-warning: #fb923c; /* orange-400 */
   }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Small, dependency-free entrance animations for Radix Dialog/DropdownMenu content, driven by
+   the data-state attribute Radix already sets. */
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+@keyframes zoom-in-95 {
+  from { opacity: 0; transform: scale(0.95); }
+}
+@keyframes slide-in-from-left {
+  from { transform: translateX(-100%); }
+}
+@keyframes slide-in-from-right {
+  from { transform: translateX(100%); }
+}
+@keyframes overlay-fade-in {
+  from { opacity: 0; }
+}
+
+.ui-animate-zoom[data-state="open"] {
+  animation: zoom-in-95 120ms ease-out, fade-in 120ms ease-out;
+}
+.ui-animate-slide-left[data-state="open"] {
+  animation: slide-in-from-left 200ms ease-out;
+}
+.ui-animate-slide-right[data-state="open"] {
+  animation: slide-in-from-right 200ms ease-out;
+}
+.ui-animate-overlay[data-state="open"] {
+  animation: overlay-fade-in 150ms ease-out;
 }
