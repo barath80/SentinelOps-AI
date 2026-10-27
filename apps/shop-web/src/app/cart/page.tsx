@@ -1,93 +1,78 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { formatPrice } from "@/lib/products";
+import { useEffect, useState } from "react";
+import ProductArt from "@/components/ProductArt";
+import { formatPrice, type ArtKind } from "@/lib/products";
 
-type Line = { product: { id: string; name: string }; qty: number; lineCents: number };
-type CartView = { lines: Line[]; totalCents: number };
+type Line = { product: { id: string; name: string; brand: string; art: ArtKind; stock: number }; color: { name: string; hex: string }; qty: number; lineCents: number };
+type CartView = { lines: Line[]; totalCents: number; count: number };
 
 export default function CartPage() {
   const router = useRouter();
   const [cart, setCart] = useState<CartView | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  // One key per checkout attempt; retries of the same attempt reuse it.
-  const idemKey = useRef<string | null>(null);
 
-  const load = useCallback(async () => setCart(await fetch("/api/cart").then((r) => r.json())), []);
   useEffect(() => {
     let live = true;
-    fetch("/api/cart")
-      .then((r) => r.json())
-      .then((c) => live && setCart(c));
-    return () => {
-      live = false;
-    };
+    fetch("/api/cart").then((r) => r.json()).then((c) => live && setCart(c));
+    return () => { live = false; };
   }, []);
 
-  async function setQty(id: string, qty: number) {
-    await fetch("/api/cart", {
+  async function setQty(l: Line, qty: number) {
+    const res = await fetch("/api/cart", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id, qty }),
+      body: JSON.stringify({ id: l.product.id, color: l.color.name, qty }),
     });
-    await load();
+    if (res.ok) {
+      setCart(await res.json());
+      router.refresh();
+    }
   }
 
-  async function checkout() {
-    setBusy(true);
-    setError(null);
-    idemKey.current ??= crypto.randomUUID();
-    const res = await fetch("/api/checkout", { method: "POST", headers: { "idempotency-key": idemKey.current } });
-    const body = await res.json().catch(() => ({}));
-    setBusy(false);
-    if (res.ok) router.push(`/order/${body.order.id}`);
-    else setError(body.error === "payment_declined" ? "Payment was declined." : "Checkout failed. Please try again.");
-  }
-
-  if (!cart) return <p>Loading…</p>;
+  if (!cart) return <p>Loading your cart…</p>;
   if (cart.lines.length === 0)
     return (
-      <p>
-        Your cart is empty.{" "}
-        <Link href="/" className="underline">
-          Browse products
-        </Link>
-      </p>
+      <div className="rounded-lg bg-white p-8 dark:bg-zinc-900">
+        <h1 className="text-2xl font-bold">Your cart is empty</h1>
+        <p className="mt-2"><Link href="/deals" className="text-sky-700 hover:underline">Shop today&apos;s deals</Link> or <Link href="/" className="text-sky-700 hover:underline">continue browsing</Link>.</p>
+      </div>
     );
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-semibold">Cart</h1>
-      <ul className="divide-y">
-        {cart.lines.map((l) => (
-          <li key={l.product.id} className="flex items-center justify-between py-3">
-            <span>
-              {l.product.name} × {l.qty}
-            </span>
-            <span className="flex items-center gap-3">
-              {formatPrice(l.lineCents)}
-              <button className="text-sm underline" onClick={() => setQty(l.product.id, 0)}>
-                Remove
-              </button>
-            </span>
-          </li>
-        ))}
-      </ul>
-      <p className="text-lg font-medium">Total: {formatPrice(cart.totalCents)}</p>
-      {error && (
-        <p role="alert" className="text-red-600">
-          {error}
-        </p>
-      )}
-      <button
-        onClick={checkout}
-        disabled={busy}
-        className="rounded bg-black px-4 py-2 text-white disabled:opacity-50 dark:bg-white dark:text-black"
-      >
-        {busy ? "Placing order…" : "Place simulated order"}
-      </button>
+    <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
+      <section className="rounded-lg bg-white p-5 dark:bg-zinc-900">
+        <h1 className="text-2xl font-bold">Shopping cart</h1>
+        <ul className="mt-3 divide-y divide-zinc-200 dark:divide-zinc-800">
+          {cart.lines.map((l) => (
+            <li key={`${l.product.id}-${l.color.name}`} className="flex gap-4 py-4">
+              <Link href={`/products/${l.product.id}`} className="shrink-0">
+                <ProductArt kind={l.product.art} color={l.color.hex} label={l.product.name} className="h-28 w-28 rounded-md" />
+              </Link>
+              <div className="flex-1">
+                <Link href={`/products/${l.product.id}`} className="font-medium hover:text-indigo-700">{l.product.name}</Link>
+                <p className="text-sm text-emerald-700 dark:text-emerald-400">{l.product.stock > 0 ? "In stock" : "Unavailable"}</p>
+                <p className="text-sm">Colour: {l.color.name}</p>
+                <div className="mt-2 flex items-center gap-3 text-sm">
+                  <label>Qty{" "}
+                    <select value={l.qty} onChange={(e) => setQty(l, Number(e.target.value))} className="ml-1 rounded border border-zinc-300 bg-white px-2 py-1 dark:bg-zinc-800">
+                      {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                  </label>
+                  <button type="button" onClick={() => setQty(l, 0)} className="text-sky-700 hover:underline">Delete</button>
+                </div>
+              </div>
+              <p className="font-semibold">{formatPrice(l.lineCents)}</p>
+            </li>
+          ))}
+        </ul>
+        <p className="text-right text-lg">Subtotal ({cart.count} items): <span className="font-semibold">{formatPrice(cart.totalCents)}</span></p>
+      </section>
+      <aside className="h-fit rounded-lg bg-white p-5 dark:bg-zinc-900">
+        <p className="text-sm text-emerald-700 dark:text-emerald-400">Your order qualifies for FREE delivery.</p>
+        <p className="mt-2 text-lg">Subtotal ({cart.count} items): <span className="font-semibold">{formatPrice(cart.totalCents)}</span></p>
+        <Link href="/checkout" className="mt-3 block rounded-full bg-amber-400 py-2 text-center font-semibold text-zinc-900 hover:bg-amber-300">Proceed to checkout</Link>
+      </aside>
     </div>
   );
 }

@@ -1,9 +1,10 @@
 import { cookies } from "next/headers";
-import { getProduct, type Product } from "./products";
+import { colorOf, getProduct, type Color, type Product } from "./products";
 
 // The cart lives in a cookie so the app stays stateless on serverless hosting.
-export type CartLine = { id: string; qty: number };
-export type DetailedLine = { product: Product; qty: number; lineCents: number };
+// A line is a product in one colour; the same product in two colours is two lines.
+export type CartLine = { id: string; qty: number; color?: string };
+export type DetailedLine = { product: Product; qty: number; color: Color; lineCents: number };
 
 const COOKIE = "cart";
 const MAX_LINES = 20;
@@ -22,7 +23,10 @@ export async function readCart(): Promise<CartLine[]> {
           typeof l?.id === "string" && Number.isInteger(l?.qty) && l.qty > 0 && !!getProduct(l.id),
       )
       .slice(0, MAX_LINES)
-      .map((l) => ({ id: l.id, qty: Math.min(l.qty, MAX_QTY) }));
+      .map((l) => {
+        const p = getProduct(l.id)!;
+        return { id: l.id, qty: Math.min(l.qty, MAX_QTY), color: colorOf(p, typeof l.color === "string" ? l.color : null).name };
+      });
   } catch {
     return [];
   }
@@ -34,16 +38,22 @@ export async function writeCart(lines: CartLine[]): Promise<void> {
     httpOnly: true,
     sameSite: "lax",
     path: "/",
-    maxAge: 60 * 60 * 24,
+    maxAge: 60 * 60 * 24 * 7,
   });
 }
 
-export function detail(lines: CartLine[]): { lines: DetailedLine[]; totalCents: number } {
+export const sameLine = (a: CartLine, id: string, color: string) => a.id === id && a.color === color;
+
+export function detail(lines: CartLine[]): { lines: DetailedLine[]; totalCents: number; count: number } {
   const detailed = lines.flatMap((l) => {
     const product = getProduct(l.id);
-    return product ? [{ product, qty: l.qty, lineCents: product.priceCents * l.qty }] : [];
+    return product ? [{ product, qty: l.qty, color: colorOf(product, l.color), lineCents: product.priceCents * l.qty }] : [];
   });
-  return { lines: detailed, totalCents: detailed.reduce((s, l) => s + l.lineCents, 0) };
+  return {
+    lines: detailed,
+    totalCents: detailed.reduce((s, l) => s + l.lineCents, 0),
+    count: detailed.reduce((s, l) => s + l.qty, 0),
+  };
 }
 
 export { MAX_QTY };

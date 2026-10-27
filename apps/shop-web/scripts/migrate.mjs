@@ -1,4 +1,4 @@
-// Creates the shop tables. Safe to re-run. Usage: npm run db:migrate
+// Creates and upgrades the shop tables. Safe to re-run. Usage: npm run db:migrate
 import dns from "node:dns";
 import net from "node:net";
 import { neon } from "@neondatabase/serverless";
@@ -24,5 +24,21 @@ await sql`
     lines           JSONB NOT NULL,
     authorization_id TEXT NOT NULL
   )`;
+
+await sql`
+  CREATE TABLE IF NOT EXISTS users (
+    id            TEXT PRIMARY KEY,
+    email         TEXT NOT NULL UNIQUE,
+    name          TEXT NOT NULL,
+    password_hash TEXT,
+    google_sub    TEXT UNIQUE,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`;
+
+// Orders placed while signed in belong to that user; guest orders keep user_id NULL.
+await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE SET NULL`;
+await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping JSONB`;
+await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'placed'`;
+await sql`CREATE INDEX IF NOT EXISTS orders_user_created ON orders (user_id, created_at DESC)`;
 
 console.log("migration ok");
