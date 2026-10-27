@@ -1,5 +1,5 @@
 import { instrument } from "@/lib/handler";
-import { requireAuthConfig } from "@/lib/authRoutes";
+import { rateLimitAuth, requireAuthConfig } from "@/lib/authRoutes";
 import { createSession } from "@/lib/session";
 import { createPasswordUser, validateSignup } from "@/lib/users";
 
@@ -7,6 +7,8 @@ import { createPasswordUser, validateSignup } from "@/lib/users";
 export const POST = instrument("/api/auth/signup", async (req) => {
   const off = requireAuthConfig();
   if (off) return off;
+  const limited = await rateLimitAuth(req, "signup", 10, 60);
+  if (limited) return limited;
   const body = (await req.json().catch(() => null)) as { email?: unknown; name?: unknown; password?: unknown } | null;
   const problem = validateSignup(body ?? {});
   if (problem) return Response.json({ error: "invalid_input", message: problem }, { status: 400 });

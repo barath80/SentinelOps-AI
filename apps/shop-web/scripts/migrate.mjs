@@ -41,4 +41,43 @@ await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping JSONB`;
 await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'placed'`;
 await sql`CREATE INDEX IF NOT EXISTS orders_user_created ON orders (user_id, created_at DESC)`;
 
+await sql`
+  CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    token_hash TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at    TIMESTAMPTZ
+  )`;
+
+// Fixed-window rate limiting shared across auth routes (login, signup, password reset).
+await sql`
+  CREATE TABLE IF NOT EXISTS rate_limits (
+    key          TEXT PRIMARY KEY,
+    count        INTEGER NOT NULL DEFAULT 0,
+    window_start TIMESTAMPTZ NOT NULL
+  )`;
+
+await sql`
+  CREATE TABLE IF NOT EXISTS wishlist_items (
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    product_id TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, product_id)
+  )`;
+
+await sql`
+  CREATE TABLE IF NOT EXISTS addresses (
+    id          TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    label       TEXT NOT NULL,
+    full_name   TEXT NOT NULL,
+    line1       TEXT NOT NULL,
+    city        TEXT NOT NULL,
+    postal_code TEXT NOT NULL,
+    country     TEXT NOT NULL,
+    is_default  BOOLEAN NOT NULL DEFAULT false,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`;
+await sql`CREATE INDEX IF NOT EXISTS addresses_user ON addresses (user_id, created_at)`;
+
 console.log("migration ok");

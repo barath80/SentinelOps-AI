@@ -1,5 +1,7 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
+import EmptyState from "@/components/EmptyState";
 import ProductCard from "@/components/ProductCard";
 import { CATEGORIES, searchProducts, type SortKey } from "@/lib/products";
 
@@ -92,9 +94,12 @@ async function Results({ searchParams }: Pick<PageProps<"/search">, "searchParam
           </div>
         </div>
         {shown.length === 0 ? (
-          <div className="mt-6 rounded-md bg-white p-6 dark:bg-zinc-900">
-            <p className="font-semibold">No products match these filters.</p>
-            <Link href="/search" className="text-sky-700 hover:underline">Clear all filters</Link>
+          <div className="mt-6">
+            <EmptyState
+              title="No products match these filters"
+              message="Try removing a filter or searching for something else."
+              action={{ href: "/search", label: "Clear all filters" }}
+            />
           </div>
         ) : (
           <ul className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
@@ -112,6 +117,21 @@ async function Results({ searchParams }: Pick<PageProps<"/search">, "searchParam
       </section>
     </div>
   );
+}
+
+export async function generateMetadata({ searchParams }: PageProps<"/search">): Promise<Metadata> {
+  const sp = await searchParams;
+  const q = typeof sp.q === "string" ? sp.q : undefined;
+  const category = typeof sp.category === "string" ? CATEGORIES.find((c) => c.id === sp.category)?.name : undefined;
+  // Only the bare landing view and bare category views are worth indexing; a text query or any
+  // price/rating/brand/page filter would otherwise create endless near-duplicate pages.
+  const hasNarrowingFilter = ["q", "min", "max", "rating", "brand", "page"].some((k) => sp[k]);
+  const title = q ? `"${q}" search results` : category ? `${category} — Shop ${category}` : "Search";
+  return {
+    title,
+    alternates: { canonical: "/search" },
+    robots: hasNarrowingFilter ? { index: false, follow: true } : undefined,
+  };
 }
 
 export default function SearchPage({ searchParams }: PageProps<"/search">) {

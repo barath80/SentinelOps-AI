@@ -1,5 +1,12 @@
+import type { Metadata } from "next";
 import ProductCard from "@/components/ProductCard";
 import { discountPct, PRODUCTS } from "@/lib/products";
+
+export const metadata: Metadata = {
+  title: "Today's Deals",
+  description: "Shop today's biggest discounts across electronics, fashion, home and more.",
+  alternates: { canonical: "/deals" },
+};
 
 export default function Deals() {
   const deals = PRODUCTS.filter((p) => discountPct(p) > 0).sort((a, b) => discountPct(b) - discountPct(a));

@@ -2,6 +2,7 @@ import Link from "next/link";
 import ProductArt from "@/components/ProductArt";
 import ProductCard from "@/components/ProductCard";
 import { CATEGORIES, discountPct, PRODUCTS } from "@/lib/products";
+import { buildWebsiteJsonLd } from "@/lib/seo";
 
 function Row({ title, href, products }: { title: string; href: string; products: typeof PRODUCTS }) {
   return (
@@ -25,6 +26,7 @@ export default function Home() {
 
   return (
     <>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(buildWebsiteJsonLd()) }} />
       <section className="relative overflow-hidden rounded-xl bg-gradient-to-r from-indigo-700 via-violet-600 to-fuchsia-500 p-8 text-white">
         <div className="max-w-xl">
           <p className="text-sm font-semibold uppercase tracking-widest text-amber-200">Autumn sale</p>

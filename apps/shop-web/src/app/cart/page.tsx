@@ -2,7 +2,9 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import EmptyState from "@/components/EmptyState";
 import ProductArt from "@/components/ProductArt";
+import { Skeleton } from "@/components/Skeleton";
 import { formatPrice, type ArtKind } from "@/lib/products";
 
 type Line = { product: { id: string; name: string; brand: string; art: ArtKind; stock: number }; color: { name: string; hex: string }; qty: number; lineCents: number };
@@ -30,13 +32,38 @@ export default function CartPage() {
     }
   }
 
-  if (!cart) return <p>Loading your cart…</p>;
+  if (!cart) {
+    return (
+      <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
+        <section className="space-y-4 rounded-lg bg-white p-5 dark:bg-zinc-900">
+          <Skeleton className="h-6 w-40" />
+          {Array.from({ length: 2 }, (_, i) => (
+            <div key={i} className="flex gap-4">
+              <Skeleton className="h-28 w-28 rounded-md" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-4 w-2/3" />
+                <Skeleton className="h-3 w-1/3" />
+                <Skeleton className="h-3 w-1/4" />
+              </div>
+            </div>
+          ))}
+        </section>
+        <Skeleton className="h-40 w-full rounded-lg" />
+      </div>
+    );
+  }
   if (cart.lines.length === 0)
     return (
-      <div className="rounded-lg bg-white p-8 dark:bg-zinc-900">
-        <h1 className="text-2xl font-bold">Your cart is empty</h1>
-        <p className="mt-2"><Link href="/deals" className="text-sky-700 hover:underline">Shop today&apos;s deals</Link> or <Link href="/" className="text-sky-700 hover:underline">continue browsing</Link>.</p>
-      </div>
+      <EmptyState
+        title="Your cart is empty"
+        message={
+          <>
+            <Link href="/deals" className="text-sky-700 hover:underline">Shop today&apos;s deals</Link> or{" "}
+            <Link href="/" className="text-sky-700 hover:underline">continue browsing</Link>.
+          </>
+        }
+        action={{ href: "/", label: "Continue shopping" }}
+      />
     );
 
   return (

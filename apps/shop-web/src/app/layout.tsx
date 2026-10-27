@@ -3,13 +3,17 @@ import Link from "next/link";
 import { Geist } from "next/font/google";
 import Header from "@/components/Header";
 import { CATEGORIES } from "@/lib/products";
+import { SITE_DESCRIPTION, SITE_NAME, siteUrl } from "@/lib/seo";
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "ShopSphere: shop electronics, fashion, home and more",
-  description: "Demo online store used as a workload for SentinelOps AI. Fictional brands; no real payments.",
+  metadataBase: new URL(siteUrl()),
+  title: { default: `${SITE_NAME}: shop electronics, fashion, home and more`, template: `%s | ${SITE_NAME}` },
+  description: SITE_DESCRIPTION,
+  openGraph: { siteName: SITE_NAME, type: "website" },
+  twitter: { card: "summary_large_image" },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

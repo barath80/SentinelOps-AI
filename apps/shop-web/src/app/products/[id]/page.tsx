@@ -1,10 +1,13 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Suspense } from "react";
 import BuyBox from "@/components/BuyBox";
 import ProductCard from "@/components/ProductCard";
 import Stars from "@/components/Stars";
 import { CATEGORIES, formatCount, getProduct, PRODUCTS, type Product } from "@/lib/products";
+import { buildBreadcrumbJsonLd, buildProductJsonLd, productMetaDescription, siteUrl } from "@/lib/seo";
+import { getSession } from "@/lib/session";
+import { isInWishlist } from "@/lib/wishlist";
 
 // Share of reviews per star level, derived from the average so the bars agree with the rating.
 function distribution(p: Product): number[] {
@@ -13,22 +16,50 @@ function distribution(p: Product): number[] {
   return weights.map((w) => Math.round((w / total) * 100));
 }
 
-async function ProductView({ params }: Pick<PageProps<"/products/[id]">, "params">) {
+// Deliberately no loading.tsx for this route: any Suspense boundary around it (explicit, or
+// implicit via loading.tsx) makes Next flush a 200 shell before notFound() resolves, so an
+// unknown id could never actually produce a real 404. generateMetadata always resolves before
+// streaming starts, so the existence check belongs here too.
+export async function generateMetadata({ params }: PageProps<"/products/[id]">): Promise<Metadata> {
+  const { id } = await params;
+  const p = getProduct(id);
+  if (!p) notFound();
+  const description = productMetaDescription(p);
+  return {
+    title: p.name,
+    description,
+    alternates: { canonical: `/products/${p.id}` },
+    openGraph: { title: p.name, description, type: "website", images: [`/products/${p.id}/opengraph-image`] },
+  };
+}
+
+export default async function ProductPage({ params }: PageProps<"/products/[id]">) {
   const { id } = await params;
   const p = getProduct(id);
   if (!p) notFound();
   const category = CATEGORIES.find((c) => c.id === p.category)!;
   const related = PRODUCTS.filter((x) => x.category === p.category && x.id !== p.id).slice(0, 6);
   const dist = distribution(p);
+  const session = await getSession();
+  const wishlisted = session ? await isInWishlist(session.userId, p.id) : false;
+  const base = siteUrl();
+  const productUrl = `${base}/products/${p.id}`;
+  const breadcrumbJsonLd = buildBreadcrumbJsonLd([
+    { name: "Home", url: base },
+    { name: category.name, url: `${base}/search?category=${category.id}` },
+    { name: p.name, url: productUrl },
+  ]);
 
   return (
     <>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(buildProductJsonLd(p, productUrl)) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd) }} />
       <nav className="mb-3 text-sm text-zinc-500" aria-label="Breadcrumb">
         <Link href="/" className="hover:underline">Home</Link> ›{" "}
         <Link href={`/search?category=${category.id}`} className="hover:underline">{category.name}</Link> ›{" "}
         <span>{p.brand}</span>
       </nav>
-      <BuyBox p={p} />
+      <BuyBox p={p} wishlisted={wishlisted} signedIn={!!session} />
 
       <section className="mt-8 grid gap-6 lg:grid-cols-2">
         <div className="rounded-lg bg-white p-5 dark:bg-zinc-900">
@@ -74,13 +105,5 @@ async function ProductView({ params }: Pick<PageProps<"/products/[id]">, "params
         </ul>
       </section>
     </>
-  );
-}
-
-export default function ProductPage({ params }: PageProps<"/products/[id]">) {
-  return (
-    <Suspense fallback={<p>Loading…</p>}>
-      <ProductView params={params} />
-    </Suspense>
   );
 }

@@ -1,17 +1,37 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Suspense } from "react";
+import { cache } from "react";
 import OrderLines from "@/components/OrderLines";
 import { getOrder } from "@/lib/orders";
 import { formatPrice } from "@/lib/products";
+import { NOINDEX } from "@/lib/seo";
 import { getSession } from "@/lib/session";
 
-async function Order({ params }: Pick<PageProps<"/order/[id]">, "params">) {
+// Deduped per request: generateMetadata and the page body both need these, and this way the DB
+// is only hit once.
+const loadOrder = cache(getOrder);
+const loadSession = cache(getSession);
+
+// Deliberately no loading.tsx for this route: any Suspense boundary around it (explicit, or
+// implicit via loading.tsx) makes Next flush a 200 shell before notFound() resolves, so an
+// unknown or inaccessible order id could never actually produce a real 404. generateMetadata
+// always resolves before streaming starts, so the existence/ownership check belongs here too.
+export async function generateMetadata({ params }: PageProps<"/order/[id]">): Promise<Metadata> {
   const { id } = await params;
-  const [order, session] = await Promise.all([getOrder(id), getSession()]);
+  const [order, session] = await Promise.all([loadOrder(id), loadSession()]);
+  if (!order || (order.userId && order.userId !== session?.userId)) notFound();
+  return { title: `Order ${order.id}`, ...NOINDEX };
+}
+
+export default async function OrderPage({ params }: PageProps<"/order/[id]">) {
+  const { id } = await params;
+  const [order, session] = await Promise.all([loadOrder(id), loadSession()]);
   // Another customer's order looks exactly like a missing one.
   if (!order || (order.userId && order.userId !== session?.userId)) notFound();
-  const own = !!order.userId && order.userId === session?.userId;
+  // A guest order has no owner to restrict it to: holding the unguessable order id is itself
+  // the access credential, so the guest who just placed it (or anyone with the link) sees it.
+  const own = order.userId === null || order.userId === session?.userId;
   return (
     <div className="mx-auto max-w-3xl rounded-lg bg-white p-6 dark:bg-zinc-900">
       <p className="text-lg font-semibold text-emerald-700 dark:text-emerald-400">✓ Order placed, thank you!</p>
@@ -30,13 +50,5 @@ async function Order({ params }: Pick<PageProps<"/order/[id]">, "params">) {
         <Link href="/" className="text-sky-700 hover:underline">Continue shopping</Link>
       </div>
     </div>
-  );
-}
-
-export default function OrderPage({ params }: PageProps<"/order/[id]">) {
-  return (
-    <Suspense fallback={<p>Loading…</p>}>
-      <Order params={params} />
-    </Suspense>
   );
 }

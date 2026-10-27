@@ -4,9 +4,10 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import ProductArt from "./ProductArt";
 import Stars from "./Stars";
+import WishlistButton from "./WishlistButton";
 import { discountPct, formatCount, formatPrice, type Product } from "@/lib/products";
 
-export default function BuyBox({ p }: { p: Product }) {
+export default function BuyBox({ p, wishlisted, signedIn }: { p: Product; wishlisted: boolean; signedIn: boolean }) {
   const router = useRouter();
   const [color, setColor] = useState(p.colors[0]);
   const [qty, setQty] = useState(1);
@@ -95,8 +96,25 @@ export default function BuyBox({ p }: { p: Product }) {
         )}
         {state === "error" && <p role="alert" className="mt-2 text-sm text-red-600">{message}</p>}
         {state === "added" && <Link href="/cart" className="mt-2 block text-center text-sm text-sky-700 hover:underline">Go to cart</Link>}
+        <div className="mt-3">
+          <WishlistButton productId={p.id} initial={wishlisted} signedIn={signedIn} />
+        </div>
         <p className="mt-3 text-xs text-zinc-500">Ships from and sold by ShopSphere. Simulated checkout: no payment is taken.</p>
       </aside>
+
+      {p.stock > 0 && (
+        <div className="fixed inset-x-0 bottom-0 z-20 flex items-center gap-3 border-t border-zinc-200 bg-white p-3 shadow-[0_-2px_8px_rgba(0,0,0,0.08)] lg:hidden dark:border-zinc-800 dark:bg-zinc-900">
+          <span className="text-lg font-semibold">{formatPrice(p.priceCents)}</span>
+          <button
+            type="button"
+            disabled={state === "busy"}
+            onClick={() => add()}
+            className="flex-1 rounded-full bg-amber-400 py-2 font-semibold text-zinc-900 hover:bg-amber-300 disabled:opacity-60"
+          >
+            {state === "added" ? "Added ✓" : "Add to cart"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

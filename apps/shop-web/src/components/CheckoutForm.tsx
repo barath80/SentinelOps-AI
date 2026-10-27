@@ -2,7 +2,10 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import CheckoutSteps from "./CheckoutSteps";
+import EmptyState from "./EmptyState";
 import ProductArt from "./ProductArt";
+import { Skeleton } from "./Skeleton";
 import { formatPrice, type ArtKind } from "@/lib/products";
 
 type Line = { product: { id: string; name: string; art: ArtKind }; color: { name: string; hex: string }; qty: number; lineCents: number };
@@ -16,7 +19,7 @@ const FIELDS: { key: string; label: string; autoComplete: string }[] = [
   { key: "country", label: "Country", autoComplete: "country-name" },
 ];
 
-export default function CheckoutForm({ defaultName }: { defaultName: string }) {
+export default function CheckoutForm({ defaultName, signedIn }: { defaultName: string; signedIn: boolean }) {
   const router = useRouter();
   const [cart, setCart] = useState<CartView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +37,8 @@ export default function CheckoutForm({ defaultName }: { defaultName: string }) {
     setBusy(true);
     setError(null);
     idemKey.current ??= crypto.randomUUID();
-    const shipping = Object.fromEntries(FIELDS.map((f) => [f.key, String(form.get(f.key) ?? "")]));
+    const shipping: Record<string, string> = Object.fromEntries(FIELDS.map((f) => [f.key, String(form.get(f.key) ?? "")]));
+    if (!signedIn) shipping.email = String(form.get("email") ?? "");
     const res = await fetch("/api/checkout", {
       method: "POST",
       headers: { "idempotency-key": idemKey.current, "content-type": "application/json" },
@@ -55,15 +59,52 @@ export default function CheckoutForm({ defaultName }: { defaultName: string }) {
     );
   }
 
-  if (!cart) return <p>Loading…</p>;
-  if (cart.lines.length === 0) return <p>Your cart is empty. <Link href="/" className="text-sky-700 hover:underline">Continue shopping</Link></p>;
+  if (!cart) {
+    return (
+      <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+        <div className="space-y-3 rounded-lg bg-white p-5 dark:bg-zinc-900">
+          <Skeleton className="h-6 w-32" />
+          <Skeleton className="h-24 w-full" />
+          <Skeleton className="h-24 w-full" />
+        </div>
+        <Skeleton className="h-48 w-full rounded-lg" />
+      </div>
+    );
+  }
+  if (cart.lines.length === 0) {
+    return (
+      <EmptyState
+        title="Your cart is empty"
+        message="Add something to your cart before checking out."
+        action={{ href: "/", label: "Continue shopping" }}
+      />
+    );
+  }
 
   return (
     <form action={place} className="grid gap-6 lg:grid-cols-[1fr_320px]">
       <section className="rounded-lg bg-white p-5 dark:bg-zinc-900">
         <h1 className="text-2xl font-bold">Checkout</h1>
-        <h2 className="mt-4 font-semibold">1. Delivery address</h2>
+        <div className="mt-3">
+          <CheckoutSteps current={error ? 1 : busy ? 2 : 1} />
+        </div>
+        {!signedIn && (
+          <p className="mt-4 rounded bg-sky-50 p-3 text-sm text-sky-900 dark:bg-sky-950 dark:text-sky-100">
+            Checking out as a guest.{" "}
+            <Link href={`/login?next=${encodeURIComponent("/checkout")}`} className="font-semibold underline">Sign in</Link> or{" "}
+            <Link href={`/signup?next=${encodeURIComponent("/checkout")}`} className="font-semibold underline">create an account</Link>{" "}
+            for faster checkout next time.
+          </p>
+        )}
+        <h2 className="mt-5 font-semibold">1. Delivery address</h2>
         <div className="mt-2 grid gap-3 sm:grid-cols-2">
+          {!signedIn && (
+            <label className="text-sm sm:col-span-2">
+              Email (for your order confirmation)
+              <input name="email" type="email" required maxLength={254} autoComplete="email"
+                className="mt-1 w-full rounded border border-zinc-300 bg-white px-3 py-2 dark:bg-zinc-800" />
+            </label>
+          )}
           {FIELDS.map((f) => (
             <label key={f.key} className={`text-sm ${f.key === "line1" ? "sm:col-span-2" : ""}`}>
               {f.label}
