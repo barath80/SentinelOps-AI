@@ -270,5 +270,7 @@ def _insert_ignore_duplicates(session, rows: list[dict]) -> int:
     # A batch can contain the same event twice; collapse it first so rowcount is exact.
     unique = {(r["tenant_id"], r["event_id"]): r for r in rows}.values()
     insert = (sqlite if session.bind.dialect.name == "sqlite" else postgresql).insert
-    result = session.execute(insert(EventRow).values(list(unique)).on_conflict_do_nothing())
-    return result.rowcount
+    # Count the rows actually inserted via RETURNING: Postgres drivers report rowcount -1 for
+    # multi-row inserts, which made the "accepted" figure wrong there (SQLite happened to work).
+    stmt = insert(EventRow).values(list(unique)).on_conflict_do_nothing().returning(EventRow.event_id)
+    return len(session.execute(stmt).all())
