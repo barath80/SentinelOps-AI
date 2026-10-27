@@ -35,7 +35,7 @@ Behavior: the server sets `tenant_id` and `ingest_time` (clients cannot); events
 - **Hypotheses** (`app/analysis/hypotheses.py`): release regression, payment provider timeout, slow dependency, traffic surge. Each gets evidence that supports, contradicts, or is missing, with an explanation built from the measured numbers and the ids of the stored events behind it.
 - **Score** (`score-v1`): `1.0*support + 0.5*temporal + 0.3*dependency - 1.2*contradicting - 0.5*missing`. It is a ranking heuristic, not a probability (`score_is_probability` is always false). Timing and topology only count when something supports the hypothesis.
 - **Abstention**: a hypothesis is `leading` only with score >= 1.0 and a lead of >= 0.5 over the next one. Otherwise the incident is `inconclusive` and the top hypothesis is `uncertain`.
-- **Known limits**: no deployment feed or database metrics are ingested, so release changes are inferred from version labels and a slow dependency is never "confirmed"; these appear as `missing` evidence. The recommended `next_test_id` is a suggestion only; diagnostic tests are not executed yet. Thresholds and weights have not been tuned on held-out data.
+- **Known limits**: no deployment feed or database metrics are ingested, so release changes are inferred from version labels and a slow dependency is never "confirmed"; these appear as `missing` evidence. The recommended `next_test_id` is run by the diagnostic tests described below. Thresholds and weights have not been tuned on held-out data.
 
 ## Diagnostic tests and the investigation loop (Phase 4)
 
@@ -56,11 +56,11 @@ Flow: `POST /api/v1/recovery-contracts` (propose) -> `/{id}/approve` -> `/{id}/e
 - **Verification** is computed only from telemetry inside the window that starts when the action finishes. Before the window closes the answer is `pending`. A success condition that is measurably missed, or a breached guardrail, is `fail`. Too few samples (error rate needs 5, p95 needs 20) or a telemetry gap is `inconclusive`, never `pass`. A successful action with failing telemetry is `FAILED`.
 - **SLO targets**: error rate <= 1%; p95 <= max(500 ms, 1.5 x the route's pre-incident p95). The basis is stored in the contract (`slo_basis`). A fixed 500 ms was unreachable on the demo setup (checkout writes to a remote database, healthy p95 about 550 ms), so the target is anchored to the measured baseline. A baseline with outliers (for example one cold start in a small sample) gives a looser target, so the basis is shown and should be reviewed at approval.
 - **Executors**: `mock` (default, records the call only) and `shop_admin` (sets the demo shop's fault scenario to `none` via its admin endpoint). Set `SENTINEL_EXECUTOR=shop_admin`, `SENTINEL_SHOP_ADMIN_URL`, `SENTINEL_SHOP_ADMIN_TOKEN`.
-- **Not built yet**: recovery rehearsal in a sandbox copy, rollback of a failed action (`rollback_template` is unset), approval expiry, real authentication of actors, and a production executor. Production mutation is out of scope.
+- **Not built yet**: recovery rehearsal in a sandbox copy, rollback of a failed action (`rollback_template` is unset), real authentication of actors, and a production executor. Production mutation is out of scope. (Approvals do expire; see Phase 7.)
 
 ## Dashboard (Phase 6)
 
-Open `/ui/` on the running API. Enter the bearer token and your name (the name is sent as `X-Actor` and recorded in the audit trail), press Connect, then "Analyze now". It lists incidents, ranked hypotheses with their evidence ledger and score history, diagnostic runs, and recovery contracts with approve / execute / verify actions.
+Open `/ui/` on the running API. Enter the bearer token and your name (the name is sent as `X-Actor` and recorded in the audit trail), press Connect, then "Analyze now". It lists incidents, ranked hypotheses with their evidence ledger and score history, per-symptom attribution, diagnostic runs, recovery contracts with approve / execute / verify actions, and prevention proposals with review buttons.
 
 It is plain HTML and JavaScript served by the API (no build step, same origin). Telemetry text is untrusted, so the page only ever sets `textContent`; a test fails if `innerHTML`-style APIs appear, and the CSP forbids inline script and outside hosts. The token is kept in `sessionStorage` (cleared when the tab closes).
 
