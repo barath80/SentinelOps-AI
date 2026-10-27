@@ -28,12 +28,13 @@ def hyp(inc, key):
     return next(h for h in inc["hypotheses"] if h["cause_key"] == key)
 
 
-def test_s01_leader_survives_its_own_falsification_test(client):
+def test_s01_leader_stands_after_its_test_and_the_alternatives(client):
     [inc] = run(client, baseline() + recent(500, 1, version="v2", message="unhandled_exception"))
     out = investigate(client, inc["id"])
     rep = out["report"]
-    assert rep["stop_reason"] == "leader_survived_falsification" and not rep["leader_changed"]
-    assert [s["test_id"] for s in rep["steps"]] == ["compare_error_rate_before_after_release"]
+    # "healthy before, failing after" is only suggestive (0.6), so the alternatives are tested too
+    assert rep["stop_reason"] == "leader_stands_alternatives_ruled_out" and not rep["leader_changed"]
+    assert rep["steps"][0]["test_id"] == "compare_error_rate_before_after_release"
     assert rep["steps"][0]["outcome"] == "supports"
     release = hyp(out["incident"], "release_regression")
     assert any(e["created_by"] == "diagnostic:compare_error_rate_before_after_release" for e in release["evidence"])
@@ -196,3 +197,18 @@ def test_payment_failures_are_matched_through_traces_when_logs_are_missing(clien
     res = client.post(f"/api/v1/incidents/{inc['id']}/diagnostics", json={"test_id": "inspect_payment_provider_status_and_spans"}, headers=AUTH).json()
     r = next(x for x in res["diagnostic_runs"] if x["test_id"] == "inspect_payment_provider_status_and_spans")
     assert r["outcome"] == "supports" and r["details"]["matched_by_trace"] >= 8 and r["details"]["matched_by_log"] == 0
+
+
+def test_decoy_release_during_a_slow_query_is_resolved_by_testing_the_alternative(client):
+    """Reproduces a live campaign incident: a new release went out exactly as a slow-query fault began.
+    The release test can only restate the coincidence, so it must not end the investigation; the
+    dependency test (traces) then shows the time is in the database."""
+    events, spans = traced(recent(201, 1520, version="v2"), "db.query orders.lookup", 0.95)
+    ingest_spans(client, spans)
+    [inc] = run(client, baseline() + events)
+    out = investigate(client, inc["id"], budget=3)
+    tested = [s["test_id"] for s in out["report"]["steps"]]
+    assert "inspect_db_pool_wait_and_query_duration" in tested  # the alternative was tested
+    assert out["incident"]["hypotheses"][0]["cause_key"] == "slow_dependency"
+    release_run = next(r for r in out["incident"]["diagnostic_runs"] if r["test_id"] == "compare_error_rate_before_after_release")
+    assert release_run["details"]["strength"] <= 0.4  # coincidence alone is weak for a slowdown

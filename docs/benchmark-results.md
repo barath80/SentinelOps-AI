@@ -1,6 +1,6 @@
 # Benchmark results
 
-Generated 2026-10-26T18:39:10.643164+00:00 with Python 3.12.10. 20 seeds x 9 scenarios x 3 systems = 540 runs. Rates are shown as `k/n = rate [Wilson 95% interval]`.
+Generated 2026-10-27T16:46:41.209911+00:00 with Python 3.12.10. 20 seeds x 9 scenarios x 3 systems = 540 runs. Rates are shown as `k/n = rate [Wilson 95% interval]`.
 
 ## Read this first
 
@@ -29,7 +29,7 @@ Generated 2026-10-26T18:39:10.643164+00:00 with Python 3.12.10. 20 seeds x 9 sce
 | **false_success_rate**<br><sub>claimed recovery that did not happen (of executed actions); lower is better</sub> | 40/80 = 50% [39%-61%] | 0/100 = 0% [0%-4%] | 0/100 = 0% [0%-4%] |
 | **verified_recovery_rate**<br><sub>recovery truly achieved and correctly claimed; higher is better</sub> | 40/120 = 33% [26%-42%] | 80/120 = 67% [58%-74%] | 80/120 = 67% [58%-74%] |
 | mean diagnostic tests run | 0.0 | 0.0 | 1.1 |
-| mean analysis time (ms) | 22 | 920 | 978 |
+| mean analysis time (ms) | 19 | 839 | 911 |
 
 ## Falsification probes (P1, P2)
 
@@ -47,7 +47,7 @@ Generated 2026-10-26T18:39:10.643164+00:00 with Python 3.12.10. 20 seeds x 9 sce
 | **false_success_rate**<br><sub>claimed recovery that did not happen (of executed actions); lower is better</sub> | 20/20 = 100% [84%-100%] | 0/40 = 0% [0%-9%] | n/a |
 | **verified_recovery_rate**<br><sub>recovery truly achieved and correctly claimed; higher is better</sub> | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] |
 | mean diagnostic tests run | 0.0 | 0.0 | 3.0 |
-| mean analysis time (ms) | 18 | 883 | 988 |
+| mean analysis time (ms) | 19 | 894 | 1062 |
 
 ## Answers by scenario
 

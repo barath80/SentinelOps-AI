@@ -95,7 +95,9 @@ def compare_error_rate_before_after_release(ctx: Context) -> DiagnosticResult:
         if base_rate >= 0.5 * rate(recent) and base_rate > 0.1:
             return DiagnosticResult("contradicts", 0.9,
                 f"The same failure rate existed before the release change ({base_rate:.0%} baseline vs {rate(recent):.0%} now).", details, refs)
-        return DiagnosticResult("supports", 0.6,
+        # Without old-release traffic this only restates that the change and the onset coincide. For a
+        # pure slowdown that is weak evidence (release defects usually show up as errors).
+        return DiagnosticResult("supports", 0.4 if ctx.features.latency_only else 0.6,
             f"Healthy before the release change ({base_rate:.0%} bad), failing after ({rate(recent):.0%}). No old-release traffic remains for a side-by-side comparison.", details, refs)
     return DiagnosticResult("contradicts", 0.8,
         f"No release change is visible: failures occur on the same release label as the healthy baseline ({sorted(base_versions)}).", details, refs)
@@ -260,7 +262,8 @@ def run_test(session: Session, incident: IncidentRow, test_id: str, cfg: Detecti
                                                    DiagnosticRunRow.test_id == test_id))
     session.flush()
     run = DiagnosticRunRow(id=str(uuid.uuid4()), incident_id=incident.id, test_id=test_id, hypothesis_key=cause_key,
-                           outcome=result.outcome, explanation=result.explanation, details=result.details,
+                           outcome=result.outcome, explanation=result.explanation,
+                           details={**result.details, "strength": result.strength},
                            source_refs=result.source_refs, duration_ms=duration_ms, created_at=datetime.now(timezone.utc))
     session.add(run)
     hyp = next((h for h in _hypotheses(session, incident.id) if h.cause_key == cause_key), None)
@@ -284,9 +287,16 @@ def reapply(session: Session, incident: IncidentRow, test_ids: list[str], cfg: D
 
 # ---- the investigation loop ----------------------------------------------------------------
 
-def _leader_test_outcome(session: Session, incident_id: str, test_id: str) -> str | None:
-    return session.scalar(select(DiagnosticRunRow.outcome).where(
+STRONG_SUPPORT = 0.8  # a leader "survives" only a test that could have refuted it and clearly did not
+
+
+def _leader_test(session: Session, incident_id: str, test_id: str) -> DiagnosticRunRow | None:
+    return session.scalar(select(DiagnosticRunRow).where(
         DiagnosticRunRow.incident_id == incident_id, DiagnosticRunRow.test_id == test_id))
+
+
+def _strongly_supported(run: DiagnosticRunRow | None) -> bool:
+    return bool(run) and run.outcome == "supports" and float((run.details or {}).get("strength", 0)) >= STRONG_SUPPORT
 
 
 def investigate(session: Session, incident: IncidentRow, budget: int = 3, cfg: DetectionConfig = DetectionConfig()) -> dict:
@@ -309,11 +319,13 @@ def investigate(session: Session, incident: IncidentRow, budget: int = 3, cfg: D
         order = [h for h in order if h.status != "falsified"]
         pick = next((h.next_test_id for h in order if h.next_test_id not in done and h.next_test_id in TESTS), None)
         if pick is None:
-            outcome = _leader_test_outcome(session, incident.id, leader.next_test_id)
-            if outcome == "no_data":
+            leader_run = _leader_test(session, incident.id, leader.next_test_id)
+            if leader_run and leader_run.outcome == "no_data":
                 stop = "leader_untestable_missing_data"
             elif incident.assessment == "leading_hypothesis":
-                stop = "leader_survived_falsification"
+                # Either the leader passed a decisive test, or its own test was only suggestive but
+                # every live alternative has now been tested and none overtook it.
+                stop = "leader_survived_falsification" if _strongly_supported(leader_run) else "leader_stands_alternatives_ruled_out"
             else:
                 stop = "no_runnable_tests"
             break
@@ -322,7 +334,8 @@ def investigate(session: Session, incident: IncidentRow, budget: int = 3, cfg: D
         steps.append({"test_id": pick, "tested_hypothesis": run.hypothesis_key, "outcome": run.outcome,
                       "explanation": run.explanation, "leader_after": now_leader.cause_key,
                       "assessment_after": incident.assessment})
-        if (pick == leader.next_test_id and run.outcome == "supports" and incident.assessment == "leading_hypothesis"
+        # Stop early only on a decisive confirmation; weak support keeps testing the alternatives.
+        if (pick == leader.next_test_id and _strongly_supported(run) and incident.assessment == "leading_hypothesis"
                 and now_leader.cause_key == leader.cause_key):
             stop = "leader_survived_falsification"
             break

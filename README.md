@@ -6,20 +6,31 @@ SentinelOps AI is an AI-assisted reliability operations platform for cloud appli
 
 > **Design principle:** never confuse a plausible explanation with a proven cause; never treat an executed action as a verified recovery.
 
-**Status:** working prototype, not yet deployed. The blueprint below is the plan; this section says what exists. The demo shop is live at https://shopsphere-demo-beta.vercel.app (orders in Neon Postgres). The SentinelOps API and dashboard run locally and are prepared for deployment ([docs/deploy-api.md](docs/deploy-api.md)).
+**Status:** working prototype, deployed. The blueprint below is the plan; this section says what exists.
+
+| Live | URL |
+| --- | --- |
+| ShopSphere demo store (Vercel, Neon Postgres) | https://shopsphere-demo-beta.vercel.app |
+| SentinelOps API and dashboard (Render) | https://sentinelops-ai-lukk.onrender.com (dashboard at `/ui/`) |
 
 | Built and tested | Where |
 | --- | --- |
-| ShopSphere demo shop with fault injection (S01, S03, S05) | [apps/shop-web](apps/shop-web) |
-| Telemetry ingestion (JSON, text and normalized adapters), idempotent | [services/sentinel-api](services/sentinel-api) |
-| Anomaly detection, incident grouping, ranked hypotheses, evidence ledger, per-symptom attribution | `app/analysis/` |
-| Falsification tests and investigation loop (explicit stop reasons, `falsified` state) | `app/analysis/diagnostics.py` |
-| Policy engine, recovery contracts, four-eyes approval, audit trail, SLO verification (pass / fail / inconclusive) | `app/recovery/` |
-| Incident-to-prevention compiler (regression test, alert rule, runbook, monitoring gaps) with human review | `app/prevention.py` |
-| Dashboard at `/ui/` | `app/ui/` |
-| Benchmark against baselines with hidden ground truth | [docs/benchmark-results.md](docs/benchmark-results.md) |
+| Demo store: 96-product catalogue, search and filters, accounts (email/password, Google when configured), checkout, orders, wishlist, password reset | [apps/shop-web](apps/shop-web) |
+| Fault injection: global (`FAULT_SCENARIO`) and scoped per request (`CHAOS_TOKEN`), faults S01, S03, S05, S08 | `apps/shop-web/src/lib/faults.ts` |
+| Telemetry: structured logs and OpenTelemetry-style traces pushed to SentinelOps | `apps/shop-web/src/lib/log.ts`, `trace.ts` |
+| Ingestion: JSON, text, normalized, span and metric adapters; idempotent | [services/sentinel-api](services/sentinel-api) |
+| Detection, incident grouping, ranked hypotheses, evidence ledger, per-symptom attribution | `app/analysis/` |
+| Falsification tests (logs, metrics and traces) and the investigation loop | `app/analysis/diagnostics.py` |
+| Policy engine, recovery contracts, four-eyes approval, audit trail, SLO verification | `app/recovery/` |
+| Incident-to-prevention compiler with human review | `app/prevention.py` |
+| Learned root-cause model: notebook, model card, shadow mode in the API, incident labels | [notebook](services/sentinel-api/notebooks/root_cause_model.ipynb), [model card](services/sentinel-api/models/MODEL_CARD.md) |
+| Dashboard | `app/ui/` |
+| Benchmark against baselines (simulated) | [docs/benchmark-results.md](docs/benchmark-results.md) |
+| Labelled-incident campaign and evaluation on the live system | [docs/real-incidents.md](docs/real-incidents.md) |
 
-**Not built:** recovery rehearsal in a sandbox copy, failure-propagation graph, rollback of failed actions, real authentication, live LLM baseline run (needs an API key), and scenarios S02, S04, S06, S07, S11. The benchmark scenarios were written by the same author as the system, so its results show the pipeline works, not that it generalizes. See each document's limits section before relying on a number.
+**Headline results, with their limits.** On the simulated benchmark SentinelOps names the right cause in 100% of determinable scenarios against 60% for a naive alert correlator, and its falsification loop removes every wrong action on the probe scenarios; the scenarios were written by the same author as the system. On 12 real labelled incidents from the live system the rule engine was right 11 times and the learned shadow model 12 times, with no wrong recovery action from either; 12 incidents give wide intervals (see the report).
+
+**Not built:** recovery rehearsal in a sandbox copy, failure-propagation graph, rollback of failed actions, real authentication for SentinelOps operators, the LLM-only baseline run (needs an API key), scenarios S02, S04, S06, S07, S11. The learned model runs in shadow mode only and never drives a decision.
 
 ## Research question
 
