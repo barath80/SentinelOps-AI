@@ -38,3 +38,8 @@ def test_list_contracts_for_an_incident(client):
     assert [c["id"] for c in listed] == [made["id"]] and listed[0]["state"] == "AWAITING_APPROVAL"
     assert client.get(f"{RC}?incident_id=other", headers=AUTH).json() == []
     assert client.get(f"{RC}?incident_id={inc['id']}").status_code == 401
+
+
+def test_root_redirects_to_the_dashboard(client):
+    res = client.get("/", follow_redirects=False)
+    assert res.status_code == 307 and res.headers["location"] == "/ui/"

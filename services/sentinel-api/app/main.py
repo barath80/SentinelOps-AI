@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -47,6 +48,11 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/", include_in_schema=False)
+    def root() -> RedirectResponse:
+        # The API has no page of its own; send people to the dashboard.
+        return RedirectResponse("/ui/", status_code=307)
 
     @app.post("/api/v1/telemetry/events", response_model=IngestResult, dependencies=[Depends(require_token)])
     async def ingest(
