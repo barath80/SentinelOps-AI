@@ -1,5 +1,6 @@
 import { after } from "next/server";
 import { flushTelemetry, log, newRequestId } from "./log";
+import { runWithScenario, scenarioFromHeaders } from "./faults";
 import { runTrace } from "./trace";
 
 type Ctx = { params: Promise<Record<string, string>> };
@@ -15,7 +16,9 @@ export function instrument(route: string, handler: Handler) {
     const start = performance.now();
     after(flushTelemetry);
     const attrs: Record<string, string | number> = { "http.route": route, "http.method": req.method };
-    return runTrace(`${req.method} ${route}`, attrs, async () => {
+    // A scoped chaos fault (see lib/faults.ts) applies to this request only and is never logged.
+    const scenario = scenarioFromHeaders(req.headers);
+    return runWithScenario(scenario, () => runTrace(`${req.method} ${route}`, attrs, async () => {
       try {
         const res = await handler(req, ctx, requestId);
         const duration_ms = Math.round(performance.now() - start);
@@ -36,6 +39,6 @@ export function instrument(route: string, handler: Handler) {
           status: 500, headers: { "x-request-id": requestId },
         });
       }
-    }, (res) => res.status >= 500);
+    }, (res) => res.status >= 500));
   };
 }

@@ -19,6 +19,8 @@ export const POST = instrument("/api/checkout", async (req, _ctx, requestId) => 
   const scenario = activeScenario();
   // S01: the "new release" crashes in checkout. (S03, a slow query, is applied inside the DB span below.)
   if (scenario === "S01_bad_deployment") throw new InjectedFault("TypeError: cannot read properties of undefined (reading 'total')");
+  // S08: plain server errors with no distinguishing signal (no exception, no release change, no timeout).
+  if (scenario === "S08_plain_errors") return Response.json({ error: "internal_error" }, { status: 500 });
 
   const body = (await req.json().catch(() => ({}))) as { shipping?: unknown };
   const shipping = validateShipping(body?.shipping);
