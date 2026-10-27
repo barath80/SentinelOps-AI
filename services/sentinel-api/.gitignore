@@ -7,3 +7,6 @@ __pycache__/
 # trained model artifacts: regenerate with notebooks/root_cause_model.ipynb
 models/*.joblib
 .ipynb_checkpoints/
+
+# campaign outputs
+campaign/results/
