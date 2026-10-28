@@ -64,7 +64,7 @@ function requireActor() {
 function propagationSection(inc) {
   const p = inc.summary.propagation;
   if (!p) return null;
-  if (!p.traced) return [h("h3", {}, "Failure propagation"), h("p", { class: "note" }, "No request traces were recorded, so only the routes themselves are observed.")];
+  if (!p.traced) return [h("h3", {}, "Failure propagation"), h("p", { class: "note" }, "No request traces were recorded, so only the routes themselves are observed."), inferred(p)];
   const c = p.earliest_containment;
   const anomalous = p.edges.filter((e) => e.anomalous);
   return [h("h3", {}, "Failure propagation"),
@@ -74,7 +74,13 @@ function propagationSection(inc) {
       h("tbody", {}, anomalous.map((e) => h("tr", {}, h("td", {}, `${e.from} to ${e.to}`), h("td", {}, e.symptom || ""),
         h("td", {}, `${e.baseline_median_ms} ms, ${Math.round(e.baseline_failure_share * 100)}% failed`),
         h("td", {}, `${e.recent_median_ms} ms, ${Math.round(e.recent_failure_share * 100)}% failed`), h("td", {}, fmtTime(e.onset)))))) : null,
+    inferred(p),
     h("p", { class: "note" }, `${p.model_version}. ${p.note}`)];
+}
+
+function inferred(p) {
+  const edges = p.edges.filter((e) => e.kind === "inferred");
+  return edges.length ? h("p", { class: "note" }, `Inferred from the service topology, not observed in any trace (health unknown): ${edges.map((e) => `${e.from} to ${e.to}`).join(", ")}.`) : null;
 }
 
 // ---- rendering ---------------------------------------------------------------------------

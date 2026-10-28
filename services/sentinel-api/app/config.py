@@ -52,6 +52,9 @@ class Settings(BaseSettings):
             raise ValueError("auth_mode must be 'operators' or 'shared_token'")
         return mode
 
+    # shared_token mode lets anyone holding the token claim any identity, so it only starts with
+    # this explicit development flag, and never on a hosted service (Render sets RENDER).
+    allow_insecure_shared_token: bool = False
     # Signs session tokens. Empty means nobody can log in (fails closed). Use 32+ random bytes.
     session_secret: str = ""
     session_ttl_seconds: int = 8 * 3600

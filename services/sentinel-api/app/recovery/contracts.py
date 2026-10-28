@@ -345,13 +345,23 @@ def rollback(sessions: sessionmaker, tenant_id: str, contract_id: str, actor: st
         action, env, timeout, rb_id = row.action_template, row.environment, row.contract["timeout_seconds"], rb.id
 
     result = executor.revert(action, env, snap, timeout)
+    # A revert that reports success is not trusted on its word: read the state back and compare it
+    # with what was captured before the action.
+    after = executor.capture(action, env, timeout) if result.ok else None
+    restored = bool(after and after.ok and after.output == snap)
+    check = {"checked": after is not None, "restored": restored, "expected": snap,
+             "observed": after.output if after else None}
 
     with sessions.begin() as s:
         row = _get(s, tenant_id, contract_id)
         rb = s.get(RollbackRunRow, rb_id)
-        rb.ended_at, rb.status, rb.output = _now(), "succeeded" if result.ok else "failed", result.output
-        if result.ok:
-            transition(s, row, "ROLLED_BACK", actor, "pre-action state restored; the incident remains open", result.output)
+        rb.ended_at, rb.status = _now(), "succeeded" if restored else "failed"
+        rb.output = {"revert": result.output, "verification": check}
+        if restored:
+            transition(s, row, "ROLLED_BACK", actor, "pre-action state restored and read back; the incident remains open", check)
+        elif result.ok:
+            transition(s, row, "ROLLBACK_FAILED", actor,
+                       "revert reported success but the state read back differs: manual intervention needed", check)
         else:
             transition(s, row, "ROLLBACK_FAILED", actor, "rollback failed: manual intervention needed", result.output)
         return row.state

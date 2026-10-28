@@ -272,3 +272,39 @@ def propose_after_reject(client, inc, action):
         if c["state"] == "AWAITING_APPROVAL":
             client.post(f"{RC}/{c['id']}/approve", json={"decision": "reject"}, headers=BOB)
     return propose(client, inc, action_template=action).json()["contract"]["rehearsal"]
+
+
+def test_rollback_is_verified_by_reading_the_state_back(env):
+    client, _ = env
+    done = approved_and_executed(client, s01_incident(client))
+    start, end = window(done)
+    feed(client, start, checkout=(500, 3))
+    verify(client, done["id"], end + timedelta(seconds=1))
+    out = client.post(f"{RC}/{done['id']}/rollback", headers=BOB).json()
+    check = out["rollback_run"]["output"]["verification"]
+    assert out["state"] == "ROLLED_BACK" and check["checked"] and check["restored"]
+    assert check["observed"] == done["contract"]["pre_action_snapshot"]["state"]
+
+
+def test_revert_that_claims_success_but_does_not_restore_is_a_failed_rollback(tmp_path):
+    class Drifting(MockExecutor):
+        """The revert call returns ok, but the system ends up somewhere else."""
+        reverted = False
+
+        def capture(self, action_id, environment, timeout_seconds):
+            return ActionResult(True, {"scenario": "something_else" if self.reverted else "S01_bad_deployment"})
+
+        def revert(self, *a):
+            self.reverted = True
+            return ActionResult(True, {"claimed": "restored"})
+
+    client = _client(tmp_path, Drifting())
+    done = approved_and_executed(client, s01_incident(client))
+    start, end = window(done)
+    feed(client, start, checkout=(500, 3))
+    verify(client, done["id"], end + timedelta(seconds=1))
+    out = client.post(f"{RC}/{done['id']}/rollback", headers=BOB).json()
+    assert out["state"] == "ROLLBACK_FAILED" and out["rollback_run"]["status"] == "failed"
+    check = out["rollback_run"]["output"]["verification"]
+    assert check["restored"] is False and check["observed"] == {"scenario": "something_else"}
+    assert "state read back differs" in out["transitions"][-1]["note"]

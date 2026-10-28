@@ -180,3 +180,18 @@ def test_session_expiry(tmp_path):
                                             session_ttl_seconds=-1)))
     headers = login(client, "root", "root-password-123")
     assert client.get("/api/v1/auth/me", headers=headers).status_code == 401
+
+
+def test_shared_token_mode_needs_the_development_flag(tmp_path):
+    from app.auth import InsecureModeRefused, check_mode
+    base = dict(database_url=f"sqlite:///{tmp_path / 'x.db'}", ingest_token="m", auth_mode="shared_token")
+    with pytest.raises(InsecureModeRefused, match="ALLOW_INSECURE_SHARED_TOKEN"):
+        create_app(Settings(**base))
+    check_mode(Settings(**base, allow_insecure_shared_token=True), environ={})  # local development: allowed
+    with pytest.raises(InsecureModeRefused, match="hosted"):
+        check_mode(Settings(**base, allow_insecure_shared_token=True), environ={"RENDER": "true"})
+
+
+def test_unknown_auth_mode_is_rejected():
+    with pytest.raises(ValueError):
+        Settings(auth_mode="open")

@@ -38,8 +38,8 @@ Status: **deployed** on Render (https://sentinelops-ai-lukk.onrender.com) with N
   every session of that operator at once. Five failed sign-ins lock a username for 15 minutes, counted per instance.
 - **One tenant.** All operators see all incidents. There is no single sign-on (OIDC) yet: accounts are local to SentinelOps.
 - **Upgrading from the shared-token version:** the default `SENTINEL_AUTH_MODE=operators` turns the old "token + your name" login
-  off. Set `SENTINEL_BOOTSTRAP_ADMIN` before deploying, or set `SENTINEL_AUTH_MODE=shared_token` to keep the old behaviour
-  (development only: anyone with the token can claim any name).
+  off. Set `SENTINEL_BOOTSTRAP_ADMIN` before deploying, The old shared-token behaviour cannot be used on Render: it starts only
+  with `SENTINEL_ALLOW_INSECURE_SHARED_TOKEN=true` and never when `RENDER` is set.
 - **Executor is `mock`.** Approving and "executing" only records the action. `shop_admin` needs `SENTINEL_SHOP_ADMIN_URL` and
   `SENTINEL_SHOP_ADMIN_TOKEN` and changes the demo shop's fault state, so use it only against a demo shop.
 - **No rate limiting** on the API apart from the sign-in lockout.

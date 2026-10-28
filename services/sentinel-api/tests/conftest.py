@@ -7,3 +7,4 @@ def _legacy_shared_token_mode(monkeypatch, request):
     tests/test_auth.py covers operator authentication, which is the default in deployment."""
     if "test_auth" not in request.node.nodeid:
         monkeypatch.setenv("SENTINEL_AUTH_MODE", "shared_token")
+        monkeypatch.setenv("SENTINEL_ALLOW_INSECURE_SHARED_TOKEN", "true")

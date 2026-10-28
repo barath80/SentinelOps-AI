@@ -177,8 +177,26 @@ def bootstrap(sessions, settings: Settings) -> None:
 
 # ---- FastAPI wiring ---------------------------------------------------------------------------
 
+class InsecureModeRefused(RuntimeError):
+    pass
+
+
+def check_mode(settings: Settings, environ=None) -> None:
+    """shared_token mode is for development only: refuse to start it anywhere else."""
+    import os
+    environ = os.environ if environ is None else environ
+    if settings.auth_mode != "shared_token":
+        return
+    if not settings.allow_insecure_shared_token:
+        raise InsecureModeRefused("SENTINEL_AUTH_MODE=shared_token needs SENTINEL_ALLOW_INSECURE_SHARED_TOKEN=true "
+                                  "(development only: anyone with the token can claim any identity)")
+    if environ.get("RENDER") or environ.get("VERCEL"):
+        raise InsecureModeRefused("shared_token mode is refused on a hosted deployment; use operators")
+
+
 class Auth:
     def __init__(self, settings: Settings, sessions):
+        check_mode(settings)
         self.settings, self.sessions, self.lockout = settings, sessions, _Lockout()
 
     @property

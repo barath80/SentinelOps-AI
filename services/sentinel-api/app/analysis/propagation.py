@@ -8,14 +8,17 @@ its onset is the first anomalous call. Ordering the anomalous nodes by onset giv
 propagation order, and the earliest anomalous dependency is where the failure could first have
 been contained (a timeout, circuit breaker or failover on that edge).
 
-Edges are labelled `observed` (spans in the incident window), `not_reached` (called in the
-baseline but no longer called, for example code that now throws before the call) or `no_traces`.
+Edges are labelled by their evidence: `observed` (spans in the incident window), `not_reached`
+(called in the baseline but no longer called, for example code that now throws before the call),
+`inferred` (declared in the static service topology but never seen in a span: its health is
+unknown, it is never marked anomalous and never chosen as the containment point) or `no_traces`.
 The result is temporal evidence from recorded spans, not a proof of causation.
 """
 from __future__ import annotations
 
 import statistics
 
+from ..recovery.policy import DEPENDS_ON
 from .detect import IncidentCandidate, Sample
 
 MODEL_VERSION = "propagation-v1"
@@ -23,6 +26,11 @@ NOTE = "Temporal order of anomalies in recorded spans. Evidence of propagation, 
 # span-name prefix -> dependency node (first match wins: the pool before the database)
 TARGETS = [("db.pool", "postgres-pool"), ("db.", "postgres"), ("payment.", "payment-provider"), ("cache.", "cache")]
 COMPUTE = "compute"
+SERVICE = "shop-web"
+# static topology names -> graph node names
+TOPOLOGY_NODE = {"postgres": "postgres", "payment-simulator": "payment-provider", "cache": "cache"}
+EVIDENCE = {"observed": "spans in the incident window", "not_reached": "spans in the baseline only",
+            "inferred": "static topology only (no span)", "no_traces": "none: no request traces"}
 MIN_RATIO, MIN_DELTA_MS, MIN_FAIL_SHARE = 2.0, 100.0, 0.5
 CONTAIN = {"postgres-pool": "cap connection waits (acquire timeout) and shed load before the pool",
            "postgres": "put a query timeout on the slow statement",
@@ -105,6 +113,14 @@ def build(cand: IncidentCandidate, samples: list[Sample], spans: dict[str, list]
     if not traced_any:
         for route in routes:
             edges.append({"from": route, "to": None, "kind": "no_traces", "anomalous": False, "onset": None})
+    seen = {e["to"] for e in edges if e["to"]}
+    for dep in DEPENDS_ON.get(SERVICE, []):
+        node = TOPOLOGY_NODE.get(dep, dep)
+        if node not in seen:  # declared but unobserved: say so rather than guess its state
+            edges.append({"from": SERVICE, "to": node, "kind": "inferred", "anomalous": None, "onset": None})
+            nodes.setdefault(node, {"id": node, "kind": "dependency", "anomalous": None, "onset": None})
+    for e in edges:
+        e["evidence"] = EVIDENCE[e["kind"]]
 
     order = sorted((n for n in nodes.values() if n["anomalous"] and n["onset"]), key=lambda n: (n["onset"], n["kind"] == "route"))
     origin_deps = [n for n in order if n["kind"] != "route"]

@@ -182,8 +182,23 @@ def test_propagation_for_a_code_fault_blames_the_route_not_a_dependency(client):
 def test_propagation_without_traces_says_so(client):
     [inc] = run(client, baseline() + recent(500, 1, version="v2", message="unhandled_exception"))
     prop = inc["summary"]["propagation"]
-    assert prop["traced"] is False and all(e["kind"] == "no_traces" for e in prop["edges"])
+    assert prop["traced"] is False and {e["kind"] for e in prop["edges"]} == {"no_traces", "inferred"}
+    inferred = [e for e in prop["edges"] if e["kind"] == "inferred"]
+    assert {e["to"] for e in inferred} == {"postgres", "payment-provider", "cache"}
+    assert all(e["anomalous"] is None and "topology" in e["evidence"] for e in inferred)  # health unknown, not "fine"
+    assert prop["earliest_containment"]["node"] == "service-code"  # inferred edges are never blamed
     assert "not proof" in prop["note"]
+
+
+def test_traced_dependencies_are_observed_and_untraced_ones_inferred(client):
+    events, spans = with_traces(recent(201, 1520), lambda e: [("db.pool.acquire", 1300, 1), ("db.query orders.lookup", 8, 1)],
+                                start_index=500)
+    base, base_spans = with_traces(baseline(), lambda e: [("db.pool.acquire", 1, 1), ("db.query orders.lookup", 6, 1)])
+    ingest_spans(client, base_spans + spans)
+    [inc] = run(client, base + events)
+    kinds = {(e["from"], e["to"]): e["kind"] for e in inc["summary"]["propagation"]["edges"]}
+    assert kinds[("/api/checkout", "postgres-pool")] == "observed"
+    assert kinds[("shop-web", "payment-provider")] == "inferred" and kinds[("shop-web", "cache")] == "inferred"
 
 
 def test_propagation_for_retry_storm_points_at_the_provider(client):
