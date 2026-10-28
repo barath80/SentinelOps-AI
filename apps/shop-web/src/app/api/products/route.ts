@@ -1,4 +1,5 @@
 import { instrument } from "@/lib/handler";
+import { cached } from "@/lib/cache";
 import { searchProducts, type SortKey } from "@/lib/products";
 
 const SORTS: SortKey[] = ["relevance", "price-asc", "price-desc", "rating", "reviews", "bestsellers"];
@@ -9,15 +10,16 @@ export const GET = instrument("/api/products", async (req) => {
   const sp = new URL(req.url).searchParams;
   const num = (k: string) => (sp.get(k) && Number.isFinite(Number(sp.get(k))) ? Number(sp.get(k)) : undefined);
   const sort = sp.get("sort") as SortKey | null;
-  const results = searchProducts({
+  const query = {
     q: sp.get("q") ?? undefined,
     category: sp.get("category") ?? undefined,
     brand: sp.get("brand") ?? undefined,
     minCents: num("min") !== undefined ? Math.round(num("min")! * 100) : undefined,
     maxCents: num("max") !== undefined ? Math.round(num("max")! * 100) : undefined,
     minRating: num("rating"),
-    sort: sort && SORTS.includes(sort) ? sort : "relevance",
-  });
+    sort: sort && SORTS.includes(sort) ? sort : ("relevance" as SortKey),
+  };
+  const results = await cached(JSON.stringify(query), () => searchProducts(query));
   const page = Math.max(1, Math.floor(num("page") ?? 1));
   return Response.json({
     total: results.length,

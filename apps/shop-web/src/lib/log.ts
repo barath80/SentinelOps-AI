@@ -2,7 +2,7 @@
 // when SENTINEL_INGEST_URL is set, pushed to SentinelOps together with request trace spans.
 // Hobby-plan Vercel has no Log Drains, so pushing from the app is the portable path. Field names
 // are stable: SentinelOps' `shop_json` and `otel_span` adapters map them to NormalizedEvent.
-import { release } from "./faults";
+import { clockOffsetMs, release } from "./faults";
 import { currentTraceId, setSpanSink, type SpanRecord } from "./trace";
 
 export type LogLevel = "info" | "warning" | "error";
@@ -38,7 +38,7 @@ setSpanSink((span) => {
 export function log(level: LogLevel, message: string, fields: LogFields = {}): void {
   const traceId = currentTraceId();
   const record = {
-    event_time: new Date().toISOString(),
+    event_time: new Date(Date.now() + clockOffsetMs()).toISOString(),
     service_name: SERVICE,
     environment: process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "local",
     version: release(),

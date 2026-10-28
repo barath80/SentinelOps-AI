@@ -11,9 +11,14 @@ import { timingSafeEqual } from "node:crypto";
 //  3. The FAULT_SCENARIO env var (affects every request; needs a redeploy to change).
 // The chaos headers are never logged or pushed to SentinelOps: they are ground truth.
 
-export type Scenario = "none" | "S01_bad_deployment" | "S03_slow_query" | "S05_payment_timeout" | "S08_plain_errors";
+export type Scenario =
+  | "none" | "S01_bad_deployment" | "S02_db_pool_exhaustion" | "S03_slow_query" | "S04_cache_unavailable"
+  | "S05_payment_timeout" | "S06_cpu_saturation" | "S07_retry_storm" | "S08_plain_errors" | "S11_clock_skew";
 
-export const SCENARIOS: Scenario[] = ["none", "S01_bad_deployment", "S03_slow_query", "S05_payment_timeout", "S08_plain_errors"];
+export const SCENARIOS: Scenario[] = [
+  "none", "S01_bad_deployment", "S02_db_pool_exhaustion", "S03_slow_query", "S04_cache_unavailable",
+  "S05_payment_timeout", "S06_cpu_saturation", "S07_retry_storm", "S08_plain_errors", "S11_clock_skew",
+];
 
 let override: Scenario | undefined;
 const scoped = new AsyncLocalStorage<Scenario>();
@@ -57,6 +62,23 @@ export function release(): string {
   return process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "v1";
 }
 
+// S11: this instance's clock runs ahead. Telemetry timestamps use it; nothing else changes.
+export const CLOCK_AHEAD_MS = 240_000;
+
+export function clockOffsetMs(): number {
+  return activeScenario() === "S11_clock_skew" ? CLOCK_AHEAD_MS : 0;
+}
+
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// S06: the instance is CPU-saturated. Every request spends this long computing on the event loop.
+export const CPU_BURN_MS = 700;
+
+export function burnCpu(ms: number): number {
+  const end = performance.now() + ms;
+  let x = 1;
+  while (performance.now() < end) x = (x * 48271) % 2147483647; // busy work the optimizer cannot drop
+  return x;
+}
 
 export class InjectedFault extends Error {}

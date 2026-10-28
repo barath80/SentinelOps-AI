@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { clockOffsetMs } from "./faults";
 
 // Minimal request tracing in OpenTelemetry's span shape. Each API request gets a trace; code can
 // wrap work in withSpan() without passing ids around (AsyncLocalStorage carries the parent).
@@ -28,7 +29,7 @@ const randomHex = (bytes: number) =>
   Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
 
 function nowNanos(): bigint {
-  const ms = performance.timeOrigin + performance.now();
+  const ms = performance.timeOrigin + performance.now() + clockOffsetMs();
   return BigInt(Math.floor(ms)) * BigInt(1_000_000) + BigInt(Math.round((ms % 1) * 1_000_000));
 }
 
