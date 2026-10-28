@@ -9,17 +9,28 @@
 <body>
   <header class="bar">
     <h1>SentinelOps AI</h1>
-    <form id="connect" class="connect">
+    <form id="login" class="connect" hidden>
+      <label>Username <input id="username" type="text" autocomplete="username" maxlength="100" required></label>
+      <label>Password <input id="password" type="password" autocomplete="current-password" maxlength="200" required></label>
+      <button type="submit">Sign in</button>
+    </form>
+    <form id="connect" class="connect" hidden>
       <label>API token <input id="token" type="password" autocomplete="off" placeholder="bearer token"></label>
       <label>Your name <input id="actor" type="text" autocomplete="off" placeholder="e.g. alice" maxlength="100"></label>
       <button type="submit">Connect</button>
+      <span class="note">Legacy shared-token mode: the name is not verified.</span>
+    </form>
+    <div id="session" class="connect" hidden>
+      <span id="whoami" class="note"></span>
       <button type="button" id="analyze" disabled>Analyze now</button>
       <label class="inline"><input id="auto" type="checkbox" checked> auto-refresh</label>
-    </form>
+      <button type="button" id="logout" class="secondary">Sign out</button>
+    </div>
   </header>
   <p id="status" role="status" class="status"></p>
+  <p id="quality" class="banner" hidden></p>
   <main class="layout">
-    <nav id="list" aria-label="Incidents"><p class="muted">Enter the token and press Connect.</p></nav>
+    <nav id="list" aria-label="Incidents"><p class="muted">Sign in to see incidents.</p></nav>
     <section id="detail" aria-live="polite"><p class="muted">Select an incident.</p></section>
   </main>
   <script src="/ui/app.js"></script>

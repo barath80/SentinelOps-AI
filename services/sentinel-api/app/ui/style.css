@@ -32,8 +32,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .muted { color: var(--muted); }
 .badge { display: inline-block; font-size: .75rem; padding: .05rem .5rem; border-radius: 999px; background: var(--neutral-bg); color: var(--text); margin-right: .3rem; white-space: nowrap; }
 .badge.good, .badge.supports, .badge.pass, .badge.leading, .badge.resolved, .badge.SUCCEEDED { background: var(--good-bg); color: var(--good); }
-.badge.bad, .badge.contradicts, .badge.fail, .badge.falsified, .badge.critical, .badge.error, .badge.FAILED, .badge.BLOCKED, .badge.REJECTED { background: var(--bad-bg); color: var(--bad); }
-.badge.warn, .badge.missing, .badge.uncertain, .badge.inconclusive, .badge.warning, .badge.pending, .badge.INCONCLUSIVE, .badge.AWAITING_APPROVAL, .badge.VERIFYING { background: var(--warn-bg); color: var(--warn); }
+.badge.bad, .badge.contradicts, .badge.fail, .badge.falsified, .badge.critical, .badge.error, .badge.FAILED, .badge.BLOCKED, .badge.REJECTED, .badge.ROLLBACK_FAILED { background: var(--bad-bg); color: var(--bad); }
+.badge.warn, .badge.missing, .badge.uncertain, .badge.inconclusive, .badge.warning, .badge.pending, .badge.INCONCLUSIVE, .badge.AWAITING_APPROVAL, .badge.VERIFYING, .badge.ROLLING_BACK, .badge.ROLLED_BACK { background: var(--warn-bg); color: var(--warn); }
 .card { border: 1px solid var(--border); border-radius: 8px; padding: .8rem; margin-bottom: .8rem; background: var(--surface); }
 .card.leading { border-color: var(--good); }
 .card.falsified { opacity: .75; }
@@ -45,3 +45,7 @@ th, td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid var(--
 .note { font-size: .8rem; color: var(--muted); }
 code { font-family: ui-monospace, monospace; font-size: .85em; }
 pre.artifact { white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: .6rem; max-height: 22rem; overflow: auto; font-size: .8rem; }
+[hidden] { display: none !important; }
+.banner { margin: 0 1rem .75rem; padding: .5rem .75rem; border-radius: 6px; background: var(--warn-bg); color: var(--warn); font-size: .88rem; }
+.chain { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin: .4rem 0; }
+.chain .arrow { color: var(--muted); }

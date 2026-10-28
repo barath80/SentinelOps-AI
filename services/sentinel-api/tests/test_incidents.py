@@ -142,7 +142,7 @@ def test_incident_endpoints_require_auth_and_404_unknown(client):
 def test_get_incident_detail(client):
     [inc] = run(client, baseline() + recent(500, 1, version="v2", message="unhandled_exception"))
     got = client.get(f"/api/v1/incidents/{inc['id']}", headers=AUTH).json()
-    assert got["id"] == inc["id"] and len(got["hypotheses"]) == 4
+    assert got["id"] == inc["id"] and len(got["hypotheses"]) == 8
 
 
 # ---- multi-symptom attribution -----------------------------------------------------------------

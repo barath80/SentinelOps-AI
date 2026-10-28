@@ -4,8 +4,9 @@ from .metrics import RATES, aggregate, per_scenario
 from .scenarios import SCENARIOS
 
 LABELS = {"alert_correlator": "Alert correlator", "llm_only": "LLM only", "sentinel": "SentinelOps (no falsification)",
-          "sentinel_falsify": "SentinelOps (+ falsification)"}
-GOOD_LOW = {"claims_to_explain_all", "false_alarm_rate", "false_diagnosis_rate", "wrongful_abstention_rate", "incorrect_intervention_rate", "false_success_rate"}
+          "sentinel_falsify": "SentinelOps (+ falsification)", "sentinel_rehearse": "SentinelOps (+ rehearsal)",
+          "sentinel_full": "SentinelOps (+ falsification + rehearsal)"}
+GOOD_LOW = {"claims_to_explain_all", "spurious_telemetry_warning_rate", "false_alarm_rate", "false_diagnosis_rate", "wrongful_abstention_rate", "incorrect_intervention_rate", "false_success_rate"}
 
 
 def _cell(r: dict) -> str:
@@ -48,10 +49,12 @@ def render(result: dict) -> str:
         "- **The alert correlator is deliberately naive** (threshold alerts plus \"blame the latest change\"). A production correlator would be stronger, so the gap to it is an upper bound on the benefit, not a measured industry comparison.",
         "- **Thresholds and weights were set by hand and not tuned on held-out data.**",
         "- **Scenarios P1 and P2 are probes** written to exercise the falsification mechanism (a plausible leader that a "
-        "direct test can disprove). They are reported separately and must not be read as a representative sample.", ""]
+        "direct test can disprove). They are reported separately and must not be read as a representative sample.",
+        "- **The baselines read request logs; SentinelOps also reads traces**, as each would on the live system. Part of "
+        "SentinelOps' advantage on S02, S04, S06 and S07 is that extra data, not only better reasoning.", ""]
     if meta["not_run"]:
         lines += ["**Not run:** " + "; ".join(f"{LABELS.get(k, k)} ({v})" for k, v in meta["not_run"].items()) + ".", ""]
-    lines += ["## Main scenarios (S00-S10)", "", *_table(main, systems), "",
+    lines += ["## Main scenarios (S00-S11)", "", *_table(main, systems), "",
               "## Falsification probes (P1, P2)", "", *_table(probes, systems), "",
               "## Answers by scenario", "",
               "Each cell counts what the system answered across seeds. `abstained` means it detected an incident but named no cause.", "",
@@ -72,8 +75,11 @@ def render(result: dict) -> str:
               "- **S10 (two faults):** see `complete_diagnosis_rate` and `incompleteness_acknowledged_rate`. Naming one of the two "
               "causes counts as a correct top-1 but an incomplete diagnosis; saying which symptom is unexplained is credited separately. "
               "In S10 the products symptom stays unexplained (attribution `partial`): the release label is app-wide, so the data cannot separate the two faults. Unit tests show the engine does report `multi_cause` when the evidence separates them.",
-              "- **Not modelled:** S02, S04, S06, S07 (no database/cache/CPU signals in the demo shop), S11 (clock skew); "
-              "S12 (unsafe action) is covered by policy tests, not here.",
+              "- **S11 (clock running ahead)** has no service fault: the right answer is no incident plus a data-quality warning "
+              "(`telemetry_issue_flagged_rate`). Only SentinelOps checks data quality, so the baselines score 0 there by design.",
+              "- **Rehearsal** can only block an action whose replay clearly fails; when the recorded data cannot show the effect it "
+              "is inconclusive and does not block. Compare `+ rehearsal` with the plain variant to see what it adds on its own.",
+              "- **S12 (unsafe action)** is covered by policy tests, not here.",
               "- **LLM-only baseline** runs only when `ANTHROPIC_API_KEY` is set; without it the comparison to an LLM is absent, "
               "not assumed.", ""]
     return "\n".join(lines)

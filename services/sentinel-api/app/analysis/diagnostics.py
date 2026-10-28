@@ -47,6 +47,26 @@ def _span_ms(sp: EventRow) -> float:
     return float(v) if isinstance(v, (int, float)) else 0.0
 
 
+def _span_name(sp: EventRow) -> str:
+    return str((sp.attributes or {}).get("name", ""))
+
+
+def _root_span(ctx: "Context", s: Sample) -> EventRow | None:
+    return next((sp for sp in ctx.spans.get(s.trace_id or "", []) if not (sp.attributes or {}).get("parent_span_id")), None)
+
+
+def _is_query_span(sp: EventRow) -> bool:
+    # "db.query ..." spans time the query itself; "db.pool.acquire" is waiting for a connection.
+    return _span_name(sp).startswith("db.") and not _span_name(sp).startswith("db.pool")
+
+
+def _share_in_spans(ctx: "Context", pick) -> tuple[list[float], list[tuple[Sample, list[EventRow]]]]:
+    """For each traced failing/slow request: the share of its duration spent in spans chosen by `pick`."""
+    traced = [(s, kids) for s, kids in ((s, _child_spans(ctx, s)) for s in ctx.features.bad) if kids]
+    shares = [min(1.0, sum(_span_ms(k) for k in kids if pick(k)) / max(s.duration_ms, 1.0)) for s, kids in traced]
+    return shares, traced
+
+
 @dataclass
 class DiagnosticResult:
     outcome: str  # supports | contradicts | inconclusive | no_data
@@ -111,11 +131,11 @@ def inspect_payment_provider_status_and_spans(ctx: Context) -> DiagnosticResult:
     timeout_requests = {rid for _, _, rid in ctx.timeouts if rid}
 
     def payment_span_failed(s: Sample) -> bool:
-        return any(str((sp.attributes or {}).get("name", "")).startswith("payment.")
-                   and ((sp.attributes or {}).get("status") == "error" or _span_ms(sp) >= 2000)
-                   for sp in _child_spans(ctx, s))
+        # A timeout signature: one provider call that hung for 2 s or more. A provider that fails
+        # fast (and is retried) is a different failure, tested by inspect_retry_amplification.
+        return any(_span_name(sp).startswith("payment.") and _span_ms(sp) >= 2000 for sp in _child_spans(ctx, s))
 
-    # Either signal counts: a payment_timeout log line, or a failed/slow payment span in the trace.
+    # Either signal counts: a payment_timeout log line, or a hung payment span in the trace.
     matched = [s for s in bad if s.request_id in timeout_requests or payment_span_failed(s)]
     share = len(matched) / len(bad)
     details = {"failing_requests": len(bad), "with_payment_timeout": len(matched),
@@ -133,21 +153,16 @@ def inspect_payment_provider_status_and_spans(ctx: Context) -> DiagnosticResult:
 
 def _db_share_from_traces(ctx: Context) -> DiagnosticResult | None:
     """If the slow requests were traced: does time inside database spans explain the slowness?"""
-    traced = [(s, _child_spans(ctx, s)) for s in ctx.features.bad]
-    traced = [(s, kids) for s, kids in traced if kids]
+    shares, traced = _share_in_spans(ctx, _is_query_span)
     if len(traced) < 3:
         return None
-    shares = []
-    for s, kids in traced:
-        db_ms = sum(_span_ms(k) for k in kids if str((k.attributes or {}).get("name", "")).startswith("db."))
-        shares.append(min(1.0, db_ms / max(s.duration_ms, 1.0)))
     med = statistics.median(shares)
     details = {"traced_slow_requests": len(traced), "median_share_in_db_spans": round(med, 3)}
     refs = [k.event_id for _, kids in traced[:3] for k in kids[:2]]
     if med >= 0.5:
-        return DiagnosticResult("supports", 0.9, f"Database spans account for {med:.0%} of the slow requests' time (median over {len(traced)} traces).", details, refs)
+        return DiagnosticResult("supports", 0.9, f"Database query spans account for {med:.0%} of the slow requests' time (median over {len(traced)} traces).", details, refs)
     if med <= 0.2:
-        return DiagnosticResult("contradicts", 0.8, f"Only {med:.0%} of the slow requests' time is spent in database spans (median over {len(traced)} traces); the time goes elsewhere.", details, refs)
+        return DiagnosticResult("contradicts", 0.8, f"Only {med:.0%} of the slow requests' time is spent in database queries (median over {len(traced)} traces); the time goes elsewhere.", details, refs)
     return DiagnosticResult("inconclusive", 0.0, f"Database spans account for {med:.0%} of the slow requests' time: partly but not clearly the cause.", details, refs)
 
 
@@ -177,6 +192,92 @@ def inspect_db_pool_wait_and_query_duration(ctx: Context) -> DiagnosticResult:
     return DiagnosticResult("contradicts", 0.7, f"Database time did not rise materially (median {b:.0f} ms before, {a:.0f} ms after).", details, refs)
 
 
+def inspect_db_pool_acquire_wait(ctx: Context) -> DiagnosticResult:
+    """If the pool is exhausted, slow requests should spend their time waiting for a connection."""
+    shares, traced = _share_in_spans(ctx, lambda k: _span_name(k).startswith("db.pool"))
+    if len(traced) < 3:
+        return DiagnosticResult("no_data", 0.0, "Fewer than 3 slow requests were traced, so connection waits cannot be measured.",
+                                {"looked_for": ["db.pool.* spans in request traces"]})
+    med = statistics.median(shares)
+    details = {"traced_slow_requests": len(traced), "median_share_waiting_for_connection": round(med, 3)}
+    refs = [k.event_id for _, kids in traced[:3] for k in kids if _span_name(k).startswith("db.pool")][:5]
+    if med >= 0.5:
+        return DiagnosticResult("supports", 0.9, f"Slow requests spent {med:.0%} of their time waiting for a database connection (median over {len(traced)} traces).", details, refs)
+    if med <= 0.1:
+        return DiagnosticResult("contradicts", 0.8, f"Slow requests spent only {med:.0%} of their time waiting for a connection; the pool is not the bottleneck.", details,
+                                [k.event_id for _, kids in traced[:3] for k in kids[:1]])
+    return DiagnosticResult("inconclusive", 0.0, f"Connection waits are {med:.0%} of the slow requests' time: a factor, not clearly the cause.", details, refs)
+
+
+def inspect_cache_spans(ctx: Context) -> DiagnosticResult:
+    """If the cache is down, slow requests should carry a failed or hung cache call."""
+    traced = [(s, kids) for s, kids in ((s, _child_spans(ctx, s)) for s in ctx.features.bad) if kids]
+    if len(traced) < 3:
+        return DiagnosticResult("no_data", 0.0, "Fewer than 3 slow requests were traced, so cache calls cannot be checked.",
+                                {"looked_for": ["cache.* spans in request traces"]})
+
+    def broken(kids):
+        return [k for k in kids if _span_name(k).startswith("cache.")
+                and ((k.attributes or {}).get("status") == "error" or _span_ms(k) >= 200)]
+    hits = [(s, broken(kids)) for s, kids in traced]
+    share = sum(1 for _, b in hits if b) / len(traced)
+    details = {"traced_slow_requests": len(traced), "with_failed_cache_call": sum(1 for _, b in hits if b)}
+    refs = [b[0].event_id for _, b in hits if b][:5]
+    if share >= 0.8:
+        return DiagnosticResult("supports", 0.9, f"{share:.0%} of slow requests had a failed or hung cache call.", details, refs)
+    if share <= 0.2:
+        return DiagnosticResult("contradicts", 0.8, f"Only {share:.0%} of slow requests had a cache problem; the cache is not the cause.", details,
+                                [s.event_id for s, _ in traced[:5]])
+    return DiagnosticResult("inconclusive", 0.0, f"{share:.0%} of slow requests had a cache problem.", details, refs)
+
+
+def inspect_cpu_time(ctx: Context) -> DiagnosticResult:
+    """If the service is CPU-bound, slow requests should spend their time on-CPU (cpu_ms on the root span)."""
+    pairs = []
+    for s in ctx.features.bad:
+        root = _root_span(ctx, s)
+        cpu = (root.attributes or {}).get("cpu_ms") if root else None
+        if isinstance(cpu, (int, float)) and not isinstance(cpu, bool):
+            pairs.append((s, root, min(1.0, float(cpu) / max(s.duration_ms, 1.0))))
+    if len(pairs) < 3:
+        return DiagnosticResult("no_data", 0.0, "Fewer than 3 slow requests report cpu_ms on their spans, so CPU time cannot be measured.",
+                                {"looked_for": ["cpu_ms attribute on request root spans"]})
+    med = statistics.median(p[2] for p in pairs)
+    details = {"slow_requests_with_cpu_time": len(pairs), "median_share_on_cpu": round(med, 3)}
+    refs = [r.event_id for _, r, _ in pairs[:5]]
+    if med >= 0.5:
+        return DiagnosticResult("supports", 0.9, f"Slow requests spent {med:.0%} of their time on-CPU (median over {len(pairs)}).", details, refs)
+    if med <= 0.2:
+        return DiagnosticResult("contradicts", 0.8, f"Slow requests spent only {med:.0%} of their time on-CPU; they were waiting, not computing.", details, refs)
+    return DiagnosticResult("inconclusive", 0.0, f"Slow requests spent {med:.0%} of their time on-CPU.", details, refs)
+
+
+def inspect_retry_amplification(ctx: Context) -> DiagnosticResult:
+    """A retry storm multiplies provider calls per request; one call per request rules it out."""
+    def calls(s: Sample) -> int:
+        return sum(1 for k in _child_spans(ctx, s) if _span_name(k).startswith("payment."))
+    traced = [(s, calls(s)) for s in ctx.features.bad if s.route == "/api/checkout" and _child_spans(ctx, s)]
+    retried = {rid for _, _, rid in ctx.features.retry_events if rid}
+    if len(traced) < 3:
+        if not ctx.features.bad or not retried:
+            return DiagnosticResult("no_data", 0.0, "Too few traced checkouts and no retry logs: provider calls per request cannot be counted.",
+                                    {"looked_for": ["payment.* spans per checkout trace", "payment_retry log lines"]})
+        share = sum(1 for s in ctx.features.bad if s.request_id in retried) / len(ctx.features.bad)
+        details = {"failing_requests": len(ctx.features.bad), "share_with_retry_logs": round(share, 3), "source": "logs"}
+        if share >= 0.6:
+            return DiagnosticResult("supports", 0.8, f"{share:.0%} of failing requests logged provider retries.", details,
+                                    [e for e, _, _ in ctx.features.retry_events[:5]])
+        return DiagnosticResult("inconclusive", 0.0, f"Only {share:.0%} of failing requests logged provider retries.", details)
+    med = statistics.median(n for _, n in traced)
+    details = {"traced_checkouts": len(traced), "median_provider_calls_per_request": med, "source": "traces"}
+    refs = [s.event_id for s, n in traced if n > 1][:5] or [s.event_id for s, _ in traced[:5]]
+    if med >= 3:
+        return DiagnosticResult("supports", 0.9, f"Each failing checkout called the provider {med:g} times (median over {len(traced)} traces): retries amplify every failure.", details, refs)
+    if med <= 1:
+        return DiagnosticResult("contradicts", 0.8, f"Failing checkouts called the provider {med:g} time (median over {len(traced)} traces): there is no retry amplification.", details, refs)
+    return DiagnosticResult("inconclusive", 0.0, f"Failing checkouts called the provider {med:g} times (median): some retrying, not clearly a storm.", details, refs)
+
+
 def compare_request_rate_to_baseline(ctx: Context) -> DiagnosticResult:
     ratio = ctx.features.volume_ratio
     if ratio is None:
@@ -195,7 +296,15 @@ TESTS = {
     "inspect_payment_provider_status_and_spans": ("payment_provider_timeout", inspect_payment_provider_status_and_spans),
     "inspect_db_pool_wait_and_query_duration": ("slow_dependency", inspect_db_pool_wait_and_query_duration),
     "compare_request_rate_to_baseline": ("traffic_surge", compare_request_rate_to_baseline),
+    "inspect_db_pool_acquire_wait": ("db_pool_exhaustion", inspect_db_pool_acquire_wait),
+    "inspect_cache_spans": ("cache_unavailable", inspect_cache_spans),
+    "inspect_cpu_time": ("resource_saturation", inspect_cpu_time),
+    "inspect_retry_amplification": ("retry_storm", inspect_retry_amplification),
 }
+
+
+def retry_events(rows) -> list[tuple[str, datetime, str | None]]:
+    return [(r.event_id, _aware(r.event_time), r.request_id) for r in rows if (r.attributes or {}).get("message") == "payment_retry"]
 
 
 def load_context(session: Session, incident: IncidentRow, cfg: DetectionConfig = DetectionConfig()) -> Context | None:
@@ -211,7 +320,7 @@ def load_context(session: Session, incident: IncidentRow, cfg: DetectionConfig =
         return None
     timeouts = [(r.event_id, _aware(r.event_time), r.request_id) for r in rows
                 if (r.attributes or {}).get("message") == "payment_timeout"]
-    feats = compute_features(cand, samples, [(i, t) for i, t, _ in timeouts])
+    feats = compute_features(cand, samples, [(i, t) for i, t, _ in timeouts], retry_events(rows))
     spans: dict[str, list[EventRow]] = {}
     for r in rows:
         if r.event_type == "trace" and r.trace_id:
@@ -299,7 +408,7 @@ def _strongly_supported(run: DiagnosticRunRow | None) -> bool:
     return bool(run) and run.outcome == "supports" and float((run.details or {}).get("strength", 0)) >= STRONG_SUPPORT
 
 
-def investigate(session: Session, incident: IncidentRow, budget: int = 3, cfg: DetectionConfig = DetectionConfig()) -> dict:
+def investigate(session: Session, incident: IncidentRow, budget: int = 4, cfg: DetectionConfig = DetectionConfig()) -> dict:
     """Try to falsify the leading hypothesis. Stops when the leader survives a real test, is
     overturned, cannot be tested for lack of data, or the budget is spent."""
     steps: list[dict] = []

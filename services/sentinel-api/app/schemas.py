@@ -90,16 +90,18 @@ class DiagnosticRequest(BaseModel):
     test_id: str
 
 
-LABELS = ("release_regression", "payment_provider_timeout", "slow_dependency", "traffic_surge", "unknown", "no_fault")
+Label = Literal["release_regression", "payment_provider_timeout", "slow_dependency", "traffic_surge",
+                "db_pool_exhaustion", "cache_unavailable", "resource_saturation", "retry_storm", "unknown", "no_fault"]
+LABELS = Label.__args__
 
 
 class LabelRequest(BaseModel):
-    label: Literal["release_regression", "payment_provider_timeout", "slow_dependency", "traffic_surge", "unknown", "no_fault"]
+    label: Label
     note: str = Field(default="", max_length=500)
 
 
 class InvestigateRequest(BaseModel):
-    budget: int = Field(default=3, ge=1, le=6)
+    budget: int = Field(default=4, ge=1, le=8)
 
 
 class IncidentOut(BaseModel):

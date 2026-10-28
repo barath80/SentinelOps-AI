@@ -23,7 +23,12 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
-ACTIONABLE = {"release_regression", "payment_provider_timeout", "slow_dependency"}
+ACTIONABLE = {"release_regression", "payment_provider_timeout", "slow_dependency", "db_pool_exhaustion",
+              "cache_unavailable", "resource_saturation", "retry_storm"}
+# Where each cause's failure starts in the propagation graph (same mapping as the benchmark).
+ORIGIN = {"release_regression": "service-code", "slow_dependency": "postgres", "db_pool_exhaustion": "postgres-pool",
+          "cache_unavailable": "cache", "payment_provider_timeout": "payment-provider", "retry_storm": "payment-provider",
+          "resource_saturation": "compute"}
 QUIET = {"unknown", "no_fault"}
 
 
@@ -82,8 +87,11 @@ def main() -> None:
 
     usable = [r for r in rows if r.get("features")]
     truth = [r["label"] for r in usable]
-    systems = {"rule engine": [r.get("rule_answer") or "unknown" for r in usable],
-               "shadow model (served)": [r.get("shadow_prediction") or "unknown" for r in usable]}
+    systems = {"rule engine": [r.get("rule_answer") or "unknown" for r in usable]}
+    investigated = [r for r in usable if r.get("investigated_answer")]
+    if len(investigated) == len(usable):
+        systems["rules + investigation"] = [r["investigated_answer"] for r in usable]
+    systems["shadow model (served)"] = [r.get("shadow_prediction") or "unknown" for r in usable]
     full = full_model_predictions(usable)
     if full is not None:
         systems["full model (local)"] = full
@@ -98,11 +106,15 @@ def main() -> None:
         if s["n"]:
             lines.append(f"| {name} | {s['n']} | {s['exact_accuracy']:.1%} | {s['decision_accuracy']:.1%} | "
                          f"{s['incorrect_intervention_rate']:.1%} | {s['missed_actionable_rate']:.1%} |")
-    lines += ["", "## Per incident", "", "| Truth | Rules | Shadow | " + ("Full model |" if full is not None else ""),
-              "| --- | --- | --- | " + ("--- |" if full is not None else "")]
+    scored = [r for r in usable if r["label"] in ORIGIN and r.get("containment")]
+    if scored:
+        ok = sum(r["containment"] == ORIGIN[r["label"]] for r in scored)
+        lines += ["", f"Earliest containment point equals the true origin in {ok}/{len(scored)} actionable incidents."]
+    lines += ["", "## Per incident", "", "| Truth | Rules | Investigated | Contain at | Shadow | " + ("Full model |" if full is not None else ""),
+              "| --- | --- | --- | --- | --- | " + ("--- |" if full is not None else "")]
     for i, r in enumerate(usable):
-        lines.append(f"| {r['label']} | {systems['rule engine'][i]} | {systems['shadow model (served)'][i]} | "
-                     + (f"{full[i]} |" if full is not None else ""))
+        lines.append(f"| {r['label']} | {systems['rule engine'][i]} | {r.get('investigated_answer') or '-'} | {r.get('containment') or '-'} | "
+                     f"{systems['shadow model (served)'][i]} | " + (f"{full[i]} |" if full is not None else ""))
     lines += ["", "Small samples give wide uncertainty: treat these numbers as a first look, not a result."]
     report = "\n".join(lines)
     (out / "real_evaluation.md").write_text(report, encoding="utf-8")

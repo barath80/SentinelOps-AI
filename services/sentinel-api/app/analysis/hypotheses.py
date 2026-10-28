@@ -57,6 +57,8 @@ class Features:
     timeout_events: list[tuple[str, datetime]]
     unaffected_routes: list[str]
     volume_ratio: float | None
+    # (event_id, time, request_id) of payment_retry log lines in the incident window
+    retry_events: list[tuple[str, datetime, str | None]] = field(default_factory=list)
 
 
 def _fp(*parts: object) -> str:
@@ -67,7 +69,8 @@ def _ids(samples: list[Sample], n: int = 5) -> list[str]:
     return [s.event_id for s in samples[:n]]
 
 
-def compute_features(c: IncidentCandidate, samples: list[Sample], timeout_events: list[tuple[str, datetime]]) -> Features:
+def compute_features(c: IncidentCandidate, samples: list[Sample], timeout_events: list[tuple[str, datetime]],
+                     retry_events: list[tuple[str, datetime, str | None]] = ()) -> Features:
     routes = set(c.routes)
     ours = [s for s in samples if s.route in routes and s.time <= c.as_of]
     recent = [s for s in ours if s.time >= c.recent_start]
@@ -98,6 +101,7 @@ def compute_features(c: IncidentCandidate, samples: list[Sample], timeout_events
         timeout_events=[t for t in timeout_events if c.recent_start <= t[1] <= c.as_of],
         unaffected_routes=unaffected,
         volume_ratio=(rec_rate / base_rate) if base_rate else None,
+        retry_events=[r for r in retry_events if c.recent_start <= r[1] <= c.as_of],
     )
 
 
@@ -147,6 +151,10 @@ def build_hypotheses(c: IncidentCandidate, f: Features) -> list[Hypothesis]:
     if f.error_dominant and not f.timeout_events:
         ev.append(EvidenceItem("contradicts", 0.8,
             "Errors occurred but no payment_timeout events were logged.", _ids(f.bad), _fp("no-timeouts", window)))
+    elif f.latency_only and not f.timeout_events:
+        ev.append(EvidenceItem("contradicts", 0.5,
+            "Requests are slow but succeeding and no payment_timeout events were logged: not a timeout signature.",
+            _ids(f.bad), _fp("slow-no-timeouts", window)))
     ev.append(EvidenceItem("missing", 0.1,
         "The payment provider's own status feed was not checked.", [], _fp("missing-provider-status")))
     first_to = min((t for _, t in f.timeout_events), default=None)
@@ -187,6 +195,43 @@ def build_hypotheses(c: IncidentCandidate, f: Features) -> list[Hypothesis]:
     out.append(Hypothesis("traffic_surge", "A traffic surge overloaded the service", ev,
         temporal=1.0 if f.volume_ratio and f.volume_ratio >= 3 else 0.0, dependency=0.5,
         next_test_id="compare_request_rate_to_baseline"))
+
+    # 5-7. Causes request logs cannot show. Each starts with only "missing" evidence, so it never
+    # leads on its own; its diagnostic (traces) can promote it once the obvious candidates fail.
+    slow = 0.5 if slow_anom else 0.0
+    out.append(Hypothesis("db_pool_exhaustion", "The database connection pool is exhausted (requests wait for a connection)", [
+        EvidenceItem("missing", 0.1, "Pool waits are invisible in request logs: they need db.pool spans or db_pool_wait_ms metrics.",
+                     [], _fp("missing-pool-wait"))],
+        temporal=slow, dependency=0.5, next_test_id="inspect_db_pool_acquire_wait"))
+    out.append(Hypothesis("cache_unavailable", "The cache is unavailable, so requests fall through to the slower origin", [
+        EvidenceItem("missing", 0.1, "Cache health is invisible in request logs: it needs cache.* spans.", [], _fp("missing-cache"))],
+        temporal=slow, dependency=0.3, next_test_id="inspect_cache_spans"))
+    ev = []
+    slow_routes = {a.route for a in c.anomalies if a.kind == "latency"}
+    if f.latency_only and len(slow_routes) >= 2 and not f.unaffected_routes:
+        ev.append(EvidenceItem("supports", 0.4,
+            f"Every active route slowed at once ({', '.join(sorted(slow_routes))}) without errors, as a shared resource limit would cause.",
+            _ids(f.bad), _fp("broad-slowdown", where, window)))
+    ev.append(EvidenceItem("missing", 0.1, "CPU time is invisible in request logs: it needs cpu_ms on request spans.", [], _fp("missing-cpu")))
+    out.append(Hypothesis("resource_saturation", "The service is CPU-saturated", ev,
+        temporal=slow, dependency=0.3, next_test_id="inspect_cpu_time"))
+
+    # 8. Retry storm ------------------------------------------------------------------------
+    ev = []
+    retried = {rid for _, _, rid in f.retry_events if rid}
+    failing_retried = [s for s in f.bad if s.request_id in retried]
+    rshare = len(failing_retried) / len(f.bad) if f.bad else 0.0
+    if len(f.retry_events) >= 3:
+        ev.append(EvidenceItem("supports", 0.7 if rshare >= 0.5 else 0.4,
+            f"{len(f.retry_events)} payment_retry lines were logged; {rshare:.0%} of failing requests retried the provider.",
+            [e for e, _, _ in f.retry_events[:5]], _fp("retries", window)))
+    else:
+        ev.append(EvidenceItem("missing", 0.2, "No payment_retry lines were logged; retry amplification can only be checked in traces.",
+                               [], _fp("missing-retries")))
+    first_retry = min((t for _, t, _ in f.retry_events), default=None)
+    out.append(Hypothesis("retry_storm", "Aggressive retries against a flaky provider are amplifying load and latency", ev,
+        temporal=1.0 if first_retry and abs((first_retry - c.onset).total_seconds()) <= 60 else 0.0,
+        dependency=1.0 if "/api/checkout" in f.routes else 0.3, next_test_id="inspect_retry_amplification"))
     return out
 
 

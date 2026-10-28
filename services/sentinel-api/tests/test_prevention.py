@@ -100,7 +100,9 @@ def test_an_unbacked_action_does_not_confirm_a_cause(env):
     client, _ = env
     [inc] = run(client, baseline() + recent(500, 40))
     c = propose(client, inc, action_template="rollback_release").json()
-    client.post(f"{RC}/{c['id']}/approve", json={"decision": "approve"}, headers=BOB)
+    # every failing request is on the old release already, so the rehearsal predicts the rollback fails
+    assert c["contract"]["rehearsal"]["outcome"] == "fail"
+    client.post(f"{RC}/{c['id']}/approve", json={"decision": "approve", "acknowledge_rehearsal_failure": True}, headers=BOB)
     done = client.post(f"{RC}/{c['id']}/execute", headers=BOB).json()
     start, end = window(done)
     feed(client, start)

@@ -4,6 +4,11 @@
   llm_only          baseline: an LLM reads a summary of the same telemetry (needs ANTHROPIC_API_KEY)
   sentinel          SentinelOps analysis, no falsification step
   sentinel_falsify  SentinelOps analysis + the falsification/investigation loop
+  sentinel_rehearse SentinelOps analysis + the rehearsal gate (no falsification): an ablation
+  sentinel_full     SentinelOps analysis + falsification + the rehearsal gate
+
+The baselines read request logs only (what a log-based alert correlator or an LLM summary would
+get). SentinelOps also ingests the traces, as it does on the live system.
 """
 from __future__ import annotations
 
@@ -20,19 +25,21 @@ from types import SimpleNamespace
 import httpx
 from sqlalchemy import select
 
-from app.adapters import shop_json
+from app.adapters import otel_span, shop_json
+from app.analysis import quality
 from app.analysis.detect import Sample, percentile, samples_from_rows
 from app.analysis.diagnostics import investigate
 from app.analysis.service import analyze
 from app.db import EventRow, HypothesisRow, IncidentRow, make_session_factory
-from app.recovery import slo
+from app.recovery import rehearsal, slo
 from app.recovery.contracts import default_slos
 from app.recovery.policy import RECOMMENDED_ACTION, evaluate as policy_evaluate
 
 from .scenarios import NOW, window
 
 TENANT = "00000000-0000-0000-0000-000000000001"
-CAUSES = ["release_regression", "payment_provider_timeout", "slow_dependency", "traffic_surge"]
+CAUSES = ["release_regression", "payment_provider_timeout", "slow_dependency", "traffic_surge", "db_pool_exhaustion",
+          "cache_unavailable", "resource_saturation", "retry_storm"]
 
 
 @dataclass
@@ -41,6 +48,8 @@ class SystemResult:
     cause: str | None = None  # None = abstained (or nothing detected)
     causes: list = field(default_factory=list)  # every cause the system claims (multi-cause aware)
     unexplained: int = 0  # symptoms the system says it could not attribute
+    telemetry_warnings: int = 0  # data-quality problems the system reported (for example clock skew)
+    origin: str | None = None  # where the system says the failure could first have been contained
     action: str | None = None
     claims_success: bool | None = None  # None = made no claim (e.g. verification inconclusive/pending)
     verification: str | None = None
@@ -54,6 +63,8 @@ def rows_from_events(events: list[dict]) -> list[SimpleNamespace]:
     """Normalize raw shop lines exactly as the ingest API would, as row-like objects."""
     out = []
     for e in events:
+        if "_span" in e:  # traces are for SentinelOps; the log-based baselines skip them
+            continue
         n = shop_json(e, TENANT, NOW)
         out.append(SimpleNamespace(event_id=str(n.event_id), event_time=n.event_time, request_id=n.request_id,
                                    attributes=n.attributes, event_type=n.event_type))
@@ -123,7 +134,8 @@ def summarize_for_llm(events: list[dict]) -> str:
     rows = rows_from_events(events)
     timeouts = sum(1 for r in rows if r.attributes.get("message") == "payment_timeout")
     exceptions = sum(1 for s in samples if s.message == "unhandled_exception")
-    lines.append(f"payment_timeout log lines: {timeouts}; unhandled exceptions: {exceptions}")
+    retries = sum(1 for r in rows if r.attributes.get("message") == "payment_retry")
+    lines.append(f"payment_timeout log lines: {timeouts}; payment_retry log lines: {retries}; unhandled exceptions: {exceptions}")
     return "\n".join(lines)
 
 
@@ -162,14 +174,18 @@ def llm_only(events: list[dict], post_events_for, *, transport=None) -> SystemRe
 
 # ---- SentinelOps ---------------------------------------------------------------------------------
 
-def sentinel(events: list[dict], post_events_for, *, falsify: bool) -> SystemResult:
+def _normalize(e: dict):
+    return otel_span(e["_span"], TENANT, NOW) if "_span" in e else shop_json(e, TENANT, NOW)
+
+
+def sentinel(events: list[dict], post_events_for, *, falsify: bool, rehearse: bool = False) -> SystemResult:
     t0 = time.perf_counter()
     tmp = Path(tempfile.mkdtemp(prefix="bench-")) / "b.db"
     sessions = make_session_factory(f"sqlite:///{tmp}")
     try:
         with sessions.begin() as s:
             for e in events:
-                n = shop_json(e, TENANT, NOW)
+                n = _normalize(e)
                 s.merge(EventRow(tenant_id=TENANT, event_id=str(n.event_id), environment=n.environment,
                                  service_name=n.service_name, event_type=n.event_type, event_time=n.event_time,
                                  ingest_time=n.ingest_time, trace_id=n.trace_id, request_id=n.request_id,
@@ -177,14 +193,15 @@ def sentinel(events: list[dict], post_events_for, *, falsify: bool) -> SystemRes
                                  schema_version=n.schema_version))
         with sessions.begin() as s:
             ids = analyze(s, TENANT, NOW)
-        res = SystemResult(detected=bool(ids))
+            report = quality.assess(list(s.scalars(select(EventRow))))
+        res = SystemResult(detected=bool(ids), telemetry_warnings=len(report["warnings"]))
         if ids:
             with sessions.begin() as s:
                 inc = s.get(IncidentRow, ids[0])
                 if falsify:
-                    report = investigate(s, inc, budget=3)
-                    res.tests_run = len(report["steps"])
-                    res.notes["stop_reason"] = report["stop_reason"]
+                    found = investigate(s, inc, budget=4)
+                    res.tests_run = len(found["steps"])
+                    res.notes["stop_reason"] = found["stop_reason"]
                 leader = s.scalars(select(HypothesisRow).where(HypothesisRow.incident_id == inc.id)
                                    .order_by(HypothesisRow.score.desc())).first()
                 if inc.assessment == "leading_hypothesis" and leader and leader.status == "leading":
@@ -193,7 +210,17 @@ def sentinel(events: list[dict], post_events_for, *, falsify: bool) -> SystemRes
                 res.unexplained = len(inc.summary.get("unexplained_symptoms", []))
                 res.notes["attribution"] = inc.summary.get("attribution")
                 res.notes["assessment"] = inc.assessment
+                containment = (inc.summary.get("propagation") or {}).get("earliest_containment") or {}
+                res.origin = containment.get("node")
                 res.action = _safe_action(res.cause)
+                if res.action and rehearse:
+                    success, guards, _ = default_slos(inc)
+                    contract = {"success_conditions": [p.model_dump() for p in success],
+                                "safety_guardrails": [p.model_dump() for p in guards], "max_gap_seconds": 30}
+                    outcome = rehearsal.rehearse(s, inc, res.action, contract)["outcome"]
+                    res.notes["rehearsal"] = outcome
+                    if outcome == "fail":  # the replay shows the action cannot meet the contract: do not act
+                        res.action = None
                 if res.action:
                     # Verification from measured post-action telemetry only.
                     outcome = _verify_with_slo(default_slos(inc), post_events_for(res.action))
@@ -210,4 +237,6 @@ SYSTEMS = {
     "llm_only": lambda ev, post: llm_only(ev, post),
     "sentinel": lambda ev, post: sentinel(ev, post, falsify=False),
     "sentinel_falsify": lambda ev, post: sentinel(ev, post, falsify=True),
+    "sentinel_rehearse": lambda ev, post: sentinel(ev, post, falsify=False, rehearse=True),
+    "sentinel_full": lambda ev, post: sentinel(ev, post, falsify=True, rehearse=True),
 }

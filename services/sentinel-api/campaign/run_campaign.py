@@ -8,7 +8,10 @@ never logged by the shop, so SentinelOps cannot see the answer.
 
 Usage:
   set CHAOS_TOKEN=...      (must equal the shop's CHAOS_TOKEN)
-  set SENTINEL_TOKEN=...   (SentinelOps bearer token)
+  set SENTINEL_TOKEN=...   (SentinelOps machine token: ingest, read, analysis)
+  set SENTINEL_OPERATOR=campaign  and  SENTINEL_OPERATOR_PASSWORD=...
+                           (an operator with the responder role: labels are recorded under it.
+                            Not needed when the API runs in legacy shared_token mode.)
   python -m campaign.run_campaign --shop https://shop.example --sentinel https://sentinel.example \
       --scenarios S01 S03 S05 S08 none surge --runs 2
 """
@@ -28,9 +31,16 @@ import httpx
 
 SCENARIOS = {
     "S01": ("S01_bad_deployment", "release_regression"),
+    "S02": ("S02_db_pool_exhaustion", "db_pool_exhaustion"),
     "S03": ("S03_slow_query", "slow_dependency"),
+    "S04": ("S04_cache_unavailable", "cache_unavailable"),
     "S05": ("S05_payment_timeout", "payment_provider_timeout"),
+    "S06": ("S06_cpu_saturation", "resource_saturation"),
+    "S07": ("S07_retry_storm", "retry_storm"),
     "S08": ("S08_plain_errors", "unknown"),
+    # The shop is healthy but its clock runs 4 minutes ahead: the right answer is no incident plus a
+    # telemetry-quality warning. Run it last: its future-stamped events land in the next run's baseline.
+    "S11": ("S11_clock_skew", "no_fault"),
     "none": (None, "no_fault"),     # healthy traffic: any incident raised is a false alarm
     "surge": (None, "traffic_surge"),  # no fault header, but six times the request rate
 }
@@ -69,8 +79,13 @@ class Shopper:
 
 
 class Sentinel:
-    def __init__(self, base: str, token: str):
+    def __init__(self, base: str, token: str, operator: str | None = None, password: str | None = None):
         self.base, self.headers = base.rstrip("/"), {"Authorization": f"Bearer {token}"}
+        self.person = {"X-Actor": "campaign"}  # legacy shared_token mode
+        if operator and password:
+            r = httpx.post(self.base + "/api/v1/auth/login", json={"username": operator, "password": password}, timeout=60)
+            r.raise_for_status()
+            self.person = {"Authorization": f"Bearer {r.json()['token']}"}
 
     def call(self, method: str, path: str, **kw):
         last = None
@@ -123,15 +138,25 @@ def run_once(key: str, shopper: Shopper, sentinel: Sentinel, investigate: bool, 
               "detected": bool(mine), "incidents": [], "skipped_already_labelled": reused}
     for inc in mine:
         labelled.add(inc["id"])
+        report = None
         if investigate:
-            sentinel.call("POST", f"/api/v1/incidents/{inc['id']}/investigate", json={"budget": 3})
-        sentinel.call("POST", f"/api/v1/incidents/{inc['id']}/label", headers={"X-Actor": "campaign"},
+            report = sentinel.call("POST", f"/api/v1/incidents/{inc['id']}/investigate", json={"budget": 4})["report"]
+        sentinel.call("POST", f"/api/v1/incidents/{inc['id']}/label", headers=sentinel.person,
                       json={"label": truth, "note": f"campaign run {run_id}: {key} ({header_scenario or 'no fault header'})"})
         shadow = (inc["summary"].get("shadow_model") or {})
+        containment = (inc["summary"].get("propagation") or {}).get("earliest_containment") or {}
         result["incidents"].append({"id": inc["id"], "title": inc["title"], "rule_answer": inc["summary"].get("rule_answer"),
+                                    "investigated_answer": (report["leader"] if report and report["assessment"] == "leading_hypothesis"
+                                                            else ("unknown" if report else None)),
+                                    "stop_reason": report["stop_reason"] if report else None,
+                                    "tests": [st["test_id"] for st in report["steps"]] if report else [],
+                                    "containment": containment.get("node"),
                                     "shadow_prediction": shadow.get("prediction"), "shadow_top": shadow.get("top_class"),
                                     "shadow_confidence": shadow.get("confidence")})
-    verdict = ", ".join(f"rules={i['rule_answer']} shadow={i['shadow_prediction']}" for i in result["incidents"]) or "no incident"
+    result["telemetry_quality"] = sentinel.call("GET", "/api/v1/telemetry/quality?window_seconds=600")["status"]
+    verdict = ", ".join(f"rules={i['rule_answer']} investigated={i['investigated_answer']} contain={i['containment']} "
+                        f"shadow={i['shadow_prediction']}" for i in result["incidents"]) or "no incident"
+    verdict += f"; telemetry {result['telemetry_quality']}"
     log(f"[{run_id}] {key} (truth {truth}): {verdict}")
     return result
 
@@ -153,10 +178,12 @@ def main() -> None:
         sys.exit("set SENTINEL_TOKEN")
     if not chaos and any(SCENARIOS[s][0] for s in args.scenarios):
         sys.exit("set CHAOS_TOKEN (the shop's CHAOS_TOKEN) to inject scoped faults")
-    shopper, sentinel = Shopper(args.shop, chaos), Sentinel(args.sentinel, token)
+    shopper = Shopper(args.shop, chaos)
+    sentinel = Sentinel(args.sentinel, token, os.environ.get("SENTINEL_OPERATOR"), os.environ.get("SENTINEL_OPERATOR_PASSWORD"))
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     plan = [s for _ in range(args.runs) for s in args.scenarios]
+    plan = [s for s in plan if s != "S11"] + [s for s in plan if s == "S11"]  # see SCENARIOS
     log(f"campaign: {len(plan)} runs, about {len(plan) * 4.7:.0f} minutes")
     labelled: set[str] = set()
     for key in plan:

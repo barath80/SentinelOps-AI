@@ -56,3 +56,19 @@ set SENTINEL_TOKEN=...   (SentinelOps bearer token)
 python -m campaign.run_campaign --shop <shop url> --sentinel <api url> --scenarios S01 S03 S05 S08 none surge --runs 1 --investigate
 python -m campaign.evaluate --sentinel <api url>
 ```
+
+## Next round: the new scenarios (pending deployment)
+
+The shop now produces S02 (connection-pool exhaustion), S04 (cache unavailable), S06 (CPU saturation), S07 (retry storm) and S11 (clock running ahead) as real behaviour, and SentinelOps has a cause, a diagnostic, a propagation node and a recovery action for each. They are tested in unit tests and the simulator but **have not yet been run against the live system**: that needs the new shop and API deployed first. Then:
+
+```
+cd services/sentinel-api
+set CHAOS_TOKEN=...                 (the shop's CHAOS_TOKEN)
+set SENTINEL_TOKEN=...              (machine token)
+set SENTINEL_OPERATOR=campaign      (a responder operator; labels are recorded under it)
+set SENTINEL_OPERATOR_PASSWORD=...
+python -m campaign.run_campaign --shop <shop url> --sentinel <api url> --scenarios S01 S02 S03 S04 S05 S06 S07 S08 none surge S11 --runs 2 --investigate --out campaign/results/live-3.jsonl
+python -m campaign.evaluate --sentinel <api url>
+```
+
+The evaluation now also scores the answer after investigation (the new causes only surface there) and the earliest containment point against the true origin. The learned shadow model predates the new causes and will miss them; that is expected and will be reported.

@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -26,7 +26,6 @@ from .db import ContractRow, EvidenceRow, HypothesisRow, IncidentRow, Prevention
 ALLOWED_IMPORTS = {"os", "uuid", "time", "statistics", "httpx", "pytest"}
 FORBIDDEN_NAMES = {"eval", "exec", "compile", "__import__", "open", "input", "globals", "locals"}
 SECRET_PATTERN = re.compile(r"(npg_[A-Za-z0-9]+|postgres(ql)?://\S+:\S+@|Bearer\s+[A-Za-z0-9]{16,}|sk-[A-Za-z0-9]{10,})")
-_ACTOR = re.compile(r"^[A-Za-z0-9_.@-]{1,100}$")
 
 
 class PreventionError(Exception):
@@ -248,15 +247,11 @@ class Review(BaseModel):
     comment: str = Field(default="", max_length=500)
 
 
-def register(app: FastAPI, tenant_id: str, sessions, require_token) -> None:
-    def actor(x_actor: Annotated[str | None, Header()] = None) -> str:
-        if not x_actor or not _ACTOR.match(x_actor):
-            raise HTTPException(status_code=400, detail="x_actor_header_required")
-        return x_actor
+def register(app: FastAPI, tenant_id: str, sessions, auth) -> None:
+    actor, approver = auth.actor("act"), auth.actor("approve")
+    deps = [Depends(auth.require("read"))]
 
-    deps = [Depends(require_token)]
-
-    @app.post("/api/v1/incidents/{incident_id}/prevention", dependencies=deps)
+    @app.post("/api/v1/incidents/{incident_id}/prevention")
     def generate(incident_id: str, who: Annotated[str, Depends(actor)]):
         try:
             with sessions.begin() as s:
@@ -274,8 +269,8 @@ def register(app: FastAPI, tenant_id: str, sessions, require_token) -> None:
                              .order_by(PreventionArtifactRow.created_at))
             return [serialize(r) for r in rows]
 
-    @app.post("/api/v1/prevention-artifacts/{artifact_id}/review", dependencies=deps)
-    def review(artifact_id: str, body: Review, who: Annotated[str, Depends(actor)]):
+    @app.post("/api/v1/prevention-artifacts/{artifact_id}/review")
+    def review(artifact_id: str, body: Review, who: Annotated[str, Depends(approver)]):
         with sessions.begin() as s:
             row = s.get(PreventionArtifactRow, artifact_id)
             inc = s.get(IncidentRow, row.incident_id) if row else None

@@ -1,0 +1,38 @@
+# Local SentinelOps: the API and dashboard on http://localhost:8000/ui/ with its own Postgres.
+#   docker compose up --build
+# Sign in as admin / change-me-local-only (created on first start). The shop runs separately
+# (apps/shop-web: npm run dev) and pushes telemetry here when its .env.local sets
+#   SENTINEL_INGEST_URL=http://localhost:8000  SENTINEL_INGEST_TOKEN=local-machine-token
+# Local development only: every secret below is a placeholder.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: sentinel
+      POSTGRES_DB: sentinel
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentinel"]
+      interval: 2s
+      retries: 30
+
+  sentinel-api:
+    build: services/sentinel-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      SENTINEL_DATABASE_URL: postgresql://sentinel:sentinel@postgres:5432/sentinel
+      SENTINEL_INGEST_TOKEN: local-machine-token
+      SENTINEL_AUTH_MODE: operators
+      SENTINEL_SESSION_SECRET: local-only-session-secret-change-me-0000
+      SENTINEL_BOOTSTRAP_ADMIN: "admin:change-me-local-only"
+      SENTINEL_EXECUTOR: mock
+      SENTINEL_ANALYZE_INTERVAL_SECONDS: "60"
+
+volumes:
+  pgdata:

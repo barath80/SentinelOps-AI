@@ -8,14 +8,15 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..db import DiagnosticRunRow, EvidenceRow, EventRow, HypothesisRow, IncidentRow
-from . import learned
+from . import learned, propagation, quality
 from .attribution import attribute
 from .ml_features import features_for_candidate
-from .diagnostics import reapply
+from .diagnostics import reapply, retry_events
 from .detect import DetectionConfig, IncidentCandidate, detect, group, samples_from_rows
 from .hypotheses import SCORE_VERSION, build_hypotheses, compute_features, rank
 
 CREATED_BY = f"rule:{SCORE_VERSION}"
+QUALITY_LOOKAHEAD_S = 300  # ingest rejects events further ahead than this anyway
 
 
 def _aware(dt: datetime) -> datetime:
@@ -46,12 +47,21 @@ def analyze(session: Session, tenant_id: str, as_of: datetime, window_seconds: i
     timeouts = [(r.event_id, _aware(r.event_time)) for r in rows if (r.attributes or {}).get("message") == "payment_timeout"]
     timeouts_with_ids = [(r.event_id, _aware(r.event_time), r.request_id) for r in rows
                          if (r.attributes or {}).get("message") == "payment_timeout"]
+    retries = retry_events(rows)
+    # Events stamped after as_of are outside detection, but they are exactly how a fast clock shows up.
+    ahead = list(session.scalars(select(EventRow).where(
+        EventRow.tenant_id == tenant_id, EventRow.event_time > as_of, EventRow.event_time <= as_of + timedelta(seconds=QUALITY_LOOKAHEAD_S))))
+    data_quality = quality.assess(rows + ahead)
+    spans: dict[str, list] = {}
+    for r in rows:
+        if r.event_type == "trace" and r.trace_id:
+            spans.setdefault(r.trace_id, []).append(r)
     valid_event_ids = {r.event_id for r in rows}
 
     ids: list[str] = []
     for cand in group(detect(samples, as_of, cfg), as_of, cfg):
         timeouts_for_features = timeouts
-        feats = compute_features(cand, samples, timeouts)
+        feats = compute_features(cand, samples, timeouts, retries)
         ranked, assessment = rank(build_hypotheses(cand, feats))
         rule_answer = ranked[0].cause_key if assessment == "leading_hypothesis" else "unknown"
         model_features = features_for_candidate(cand, samples, feats, timeouts_with_ids)
@@ -88,10 +98,12 @@ def analyze(session: Session, tenant_id: str, as_of: datetime, window_seconds: i
                 "recent_p95_ms": a.recent_p95_ms, "baseline_p95_ms": a.baseline_p95_ms,
             } for a in cand.anomalies],
             "unaffected_routes": feats.unaffected_routes,
-            **attribute(cand, samples, timeouts_for_features),
+            **attribute(cand, samples, timeouts_for_features, retries),
             "model_features": {k: round(v, 6) for k, v in model_features.items()},
             "rule_answer": rule_answer,
             "shadow_model": shadow_result,
+            "telemetry_quality": data_quality,
+            "propagation": propagation.build(cand, samples, spans),
         }
         session.flush()
         for h in ranked:

@@ -4,8 +4,10 @@
 "use strict";
 
 const $ = (sel) => document.querySelector(sel);
-const state = { token: sessionStorage.getItem("sentinel_token") || "", actor: localStorage.getItem("sentinel_actor") || "",
-                selected: null, incidents: [], timer: null, signature: "", contracts: [], prevention: [] };
+// mode: "operators" (sign in; identity and role come from the session) or "shared_token" (legacy).
+const state = { mode: "operators", token: sessionStorage.getItem("sentinel_token") || "", actor: sessionStorage.getItem("sentinel_actor") || "",
+                role: sessionStorage.getItem("sentinel_role") || "", selected: null, incidents: [], timer: null, signature: "",
+                contracts: [], prevention: [] };
 
 function h(tag, props, ...kids) {
   const el = document.createElement(tag);
@@ -33,7 +35,7 @@ function setStatus(message, isError) {
 async function api(path, { method = "GET", body, actor } = {}) {
   const headers = { authorization: `Bearer ${state.token}` };
   if (body !== undefined) headers["content-type"] = "application/json";
-  if (actor) headers["x-actor"] = state.actor;
+  if (actor && state.mode === "shared_token") headers["x-actor"] = state.actor; // operators: the server knows who you are
   const res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   const data = await res.json().catch(() => null);
   if (!res.ok) {
@@ -56,7 +58,23 @@ async function run(label, fn) {
 }
 
 function requireActor() {
-  if (!state.actor) throw new Error("enter your name in the header first (it is recorded in the audit trail)");
+  if (!state.actor) throw new Error(state.mode === "operators" ? "sign in first" : "enter your name in the header first (it is recorded in the audit trail)");
+}
+
+function propagationSection(inc) {
+  const p = inc.summary.propagation;
+  if (!p) return null;
+  if (!p.traced) return [h("h3", {}, "Failure propagation"), h("p", { class: "note" }, "No request traces were recorded, so only the routes themselves are observed.")];
+  const c = p.earliest_containment;
+  const anomalous = p.edges.filter((e) => e.anomalous);
+  return [h("h3", {}, "Failure propagation"),
+    p.order.length ? h("div", { class: "chain" }, p.order.map((n, i) => [i ? h("span", { class: "arrow" }, "then") : null, badge(n, "warn")])) : null,
+    c ? h("p", {}, badge(`contain at ${c.node}`, "good"), ` ${c.how}. `, h("span", { class: "note" }, c.reason)) : null,
+    anomalous.length ? h("table", {}, h("thead", {}, h("tr", {}, ...["Edge", "Symptom", "Baseline", "Incident", "Onset"].map((t) => h("th", {}, t)))),
+      h("tbody", {}, anomalous.map((e) => h("tr", {}, h("td", {}, `${e.from} to ${e.to}`), h("td", {}, e.symptom || ""),
+        h("td", {}, `${e.baseline_median_ms} ms, ${Math.round(e.baseline_failure_share * 100)}% failed`),
+        h("td", {}, `${e.recent_median_ms} ms, ${Math.round(e.recent_failure_share * 100)}% failed`), h("td", {}, fmtTime(e.onset)))))) : null,
+    h("p", { class: "note" }, `${p.model_version}. ${p.note}`)];
 }
 
 // ---- rendering ---------------------------------------------------------------------------
@@ -99,7 +117,7 @@ function diagnosticsSection(inc) {
   return [
     h("h3", {}, "Diagnostic tests (read-only)"),
     h("div", { class: "row" },
-      h("button", { type: "button", onclick: () => run("Investigation", async () => { await api(`/api/v1/incidents/${inc.id}/investigate`, { method: "POST", body: { budget: 3 } }); }) }, "Run investigation"),
+      h("button", { type: "button", onclick: () => run("Investigation", async () => { await api(`/api/v1/incidents/${inc.id}/investigate`, { method: "POST", body: { budget: 4 } }); }) }, "Run investigation"),
       h("span", { class: "note" }, "Tries to disprove the leading cause, then re-ranks.")),
     runs.length ? h("table", {}, h("thead", {}, h("tr", {}, ...["Test", "Outcome", "Result"].map((t) => h("th", {}, t)))),
       h("tbody", {}, runs.map((r) => h("tr", {}, h("td", {}, h("code", {}, r.test_id)), h("td", {}, badge(r.outcome)), h("td", {}, r.explanation)))))
@@ -107,18 +125,45 @@ function diagnosticsSection(inc) {
   ];
 }
 
+function rehearsalBlock(c) {
+  const r = c.contract.rehearsal;
+  if (!r) return null;
+  return h("div", {}, h("h3", {}, "Rehearsal (simulation)"),
+    h("p", {}, badge(r.outcome), r.reason),
+    h("p", { class: "note" }, `${r.model_version}. ${r.label}`));
+}
+
+function rollbackBlock(c) {
+  const rb = c.rollback_run;
+  if (!rb) return null;
+  return h("p", {}, badge(`rollback ${rb.status}`, rb.status === "succeeded" ? "good" : "bad"),
+    h("span", { class: "note" }, ` ${rb.template} by ${rb.requested_by}${rb.reason ? ": " + rb.reason : ""}. The incident stays open; undoing a change is not a recovery.`));
+}
+
 function contractCard(c) {
   const actions = [];
+  const path = `/api/v1/recovery-contracts/${c.id}`;
   if (c.state === "AWAITING_APPROVAL") {
     const comment = h("input", { type: "text", placeholder: "comment (optional)", maxlength: "500" });
+    const rehearsalFailed = c.contract.rehearsal && c.contract.rehearsal.outcome === "fail";
+    const ack = rehearsalFailed ? h("input", { type: "checkbox", id: `ack-${c.id}` }) : null;
     actions.push(comment,
-      h("button", { type: "button", onclick: () => run("Approve", async () => { requireActor(); await api(`/api/v1/recovery-contracts/${c.id}/approve`, { method: "POST", actor: true, body: { decision: "approve", comment: comment.value } }); }) }, "Approve"),
-      h("button", { type: "button", class: "danger", onclick: () => run("Reject", async () => { requireActor(); await api(`/api/v1/recovery-contracts/${c.id}/approve`, { method: "POST", actor: true, body: { decision: "reject", comment: comment.value } }); }) }, "Reject"));
+      ack ? h("label", { class: "note", for: `ack-${c.id}` }, ack, " I have read the failed rehearsal and still approve") : null,
+      h("button", { type: "button", onclick: () => run("Approve", async () => { requireActor(); await api(`${path}/approve`, { method: "POST", actor: true, body: { decision: "approve", comment: comment.value, acknowledge_rehearsal_failure: Boolean(ack && ack.checked) } }); }) }, "Approve"),
+      h("button", { type: "button", class: "danger", onclick: () => run("Reject", async () => { requireActor(); await api(`${path}/approve`, { method: "POST", actor: true, body: { decision: "reject", comment: comment.value } }); }) }, "Reject"));
   }
+  if (c.state === "AWAITING_APPROVAL" || c.state === "READY_FOR_ACTION")
+    actions.push(h("button", { type: "button", class: "secondary", onclick: () => run("Rehearse", async () => { requireActor(); await api(`${path}/rehearse`, { method: "POST", actor: true }); }) }, "Re-run rehearsal"));
   if (c.state === "READY_FOR_ACTION")
-    actions.push(h("button", { type: "button", onclick: () => run("Execute", async () => { requireActor(); await api(`/api/v1/recovery-contracts/${c.id}/execute`, { method: "POST", actor: true }); }) }, "Execute action"));
+    actions.push(h("button", { type: "button", onclick: () => run("Execute", async () => { requireActor(); await api(`${path}/execute`, { method: "POST", actor: true }); }) }, "Execute action"));
   if (c.state === "VERIFYING")
-    actions.push(h("button", { type: "button", onclick: () => run("Verify", async () => { requireActor(); const r = await api(`/api/v1/recovery-contracts/${c.id}/verify`, { method: "POST", actor: true }); setStatus(`Verification: ${r.outcome}. ${r.reason}`); }) }, "Check verification"));
+    actions.push(h("button", { type: "button", onclick: () => run("Verify", async () => { requireActor(); const r = await api(`${path}/verify`, { method: "POST", actor: true }); setStatus(`Verification: ${r.outcome}. ${r.reason}`); }) }, "Check verification"));
+  if ((c.state === "FAILED" || c.state === "INCONCLUSIVE") && c.contract.pre_action_snapshot) {
+    const why = h("input", { type: "text", placeholder: "reason for rollback", maxlength: "500" });
+    actions.push(why, h("button", { type: "button", class: c.contract.rollback_recommended ? "danger" : "secondary",
+      onclick: () => run("Rollback", async () => { requireActor(); await api(`${path}/rollback`, { method: "POST", actor: true, body: { reason: why.value } }); }) },
+      c.contract.rollback_recommended ? "Roll back (recommended: a guardrail was breached)" : "Roll back"));
+  }
 
   const win = c.contract.verification_window;
   const pol = c.contract.policy;
@@ -127,6 +172,7 @@ function contractCard(c) {
     h("div", { class: "note" }, `Environment ${c.environment}. Proposed by ${c.proposed_by}. Policy ${pol.version}: blast radius ${pol.blast_radius.risk_label}`
       + (pol.blast_radius.dependents.length ? ` (reaches ${pol.blast_radius.dependents.join(", ")})` : "") + "."),
     c.contract.warnings.length ? h("p", {}, c.contract.warnings.map((w) => badge(w, "warn"))) : null,
+    rehearsalBlock(c),
     h("h3", {}, "Success conditions and guardrails"),
     h("ul", { class: "evidence" }, [...c.contract.success_conditions.map((p) => ["success", p]), ...c.contract.safety_guardrails.map((p) => ["guardrail", p])]
       .map(([kind, p]) => h("li", {}, badge(kind, "neutral"), `${p.sli}(${p.route}) ${p.op} ${p.threshold} (needs ${p.min_samples}+ samples)`))),
@@ -134,13 +180,14 @@ function contractCard(c) {
     c.verifications.length ? h("div", {}, h("h3", {}, "Verification"), ...c.verifications.map((v) => h("div", {}, h("p", {}, badge(v.outcome), v.reason),
       h("table", {}, h("thead", {}, h("tr", {}, ...["Kind", "Predicate", "Measured", "Samples", "Result"].map((t) => h("th", {}, t)))),
         h("tbody", {}, v.predicates.map((p) => h("tr", {}, h("td", {}, p.kind), h("td", {}, p.description), h("td", {}, p.value ?? "n/a"), h("td", {}, p.samples), h("td", {}, badge(p.status === "met" ? "pass" : p.status === "unmet" ? "fail" : "inconclusive", p.status === "met" ? "pass" : p.status === "unmet" ? "fail" : "inconclusive")))))))) ) : null,
+    rollbackBlock(c),
     h("div", { class: "row" }, actions),
     h("details", {}, h("summary", {}, `Audit trail (${c.transitions.length})`),
       h("ul", { class: "evidence" }, c.transitions.map((t) => h("li", {}, `${fmtTime(t.at)}: ${t.from || "start"} to ${t.to} by ${t.actor} (${t.policy_version})${t.note ? " - " + t.note : ""}`)))));
 }
 
 function recoverySection(inc) {
-  const active = state.contracts.some((c) => ["AWAITING_APPROVAL", "READY_FOR_ACTION", "EXECUTING", "VERIFYING"].includes(c.state));
+  const active = state.contracts.some((c) => ["AWAITING_APPROVAL", "READY_FOR_ACTION", "EXECUTING", "VERIFYING", "ROLLING_BACK"].includes(c.state));
   const propose = h("button", { type: "button", disabled: active || inc.status !== "open" ? "disabled" : null,
     onclick: () => run("Propose fix", async () => { requireActor(); await api("/api/v1/recovery-contracts", { method: "POST", actor: true, body: { incident_id: inc.id } }); }) }, "Propose recommended fix");
   return [h("h3", {}, "Recovery"),
@@ -190,7 +237,8 @@ function preventionSection(inc) {
     state.prevention.length ? state.prevention.map(artifactCard) : null];
 }
 
-const LABELS = ["release_regression", "payment_provider_timeout", "slow_dependency", "traffic_surge", "unknown", "no_fault"];
+const LABELS = ["release_regression", "payment_provider_timeout", "slow_dependency", "traffic_surge", "db_pool_exhaustion",
+  "cache_unavailable", "resource_saturation", "retry_storm", "unknown", "no_fault"];
 
 function shadowSection(inc) {
   const sh = inc.summary.shadow_model;
@@ -231,6 +279,7 @@ function renderDetail() {
     h("h3", {}, "Hypotheses (ranked)"),
     inc.hypotheses.map((x) => hypothesisCard(x, inc)),
     attributionSection(inc),
+    propagationSection(inc),
     shadowSection(inc),
     diagnosticsSection(inc),
     recoverySection(inc),
@@ -240,6 +289,13 @@ function renderDetail() {
 
 function render() { renderList(); renderDetail(); }
 
+function renderQuality(q) {
+  const el = $("#quality");
+  const warnings = (q && q.warnings) || [];
+  el.hidden = !warnings.length;
+  el.textContent = warnings.map((w) => `Telemetry problem: ${w.message}`).join(" ");
+}
+
 async function refresh(force) {
   if (!state.token) return;
   try {
@@ -247,33 +303,79 @@ async function refresh(force) {
     if (!state.selected && state.incidents.length) state.selected = state.incidents[0].id;
     state.contracts = state.selected ? await api(`/api/v1/recovery-contracts?incident_id=${encodeURIComponent(state.selected)}`) : [];
     state.prevention = state.selected ? await api(`/api/v1/incidents/${encodeURIComponent(state.selected)}/prevention`) : [];
+    renderQuality(await api("/api/v1/telemetry/quality"));
     const signature = JSON.stringify([state.incidents, state.contracts, state.prevention, state.selected]);
     if (force || signature !== state.signature) { state.signature = signature; render(); }
   } catch (err) {
+    if (/invalid_token|session_revoked/.test(err.message)) { signOut(); setStatus("Your session ended. Sign in again.", true); return; }
     setStatus(`Refresh failed: ${err.message}`, true);
   }
 }
 
 function schedule() {
   clearInterval(state.timer);
-  if ($("#auto").checked) state.timer = setInterval(() => refresh(false), 5000);
+  if (state.token && $("#auto").checked) state.timer = setInterval(() => refresh(false), 5000);
 }
 
-$("#token").value = state.token;
-$("#actor").value = state.actor;
+function showForms() {
+  const signedIn = Boolean(state.token);
+  $("#login").hidden = signedIn || state.mode !== "operators";
+  $("#connect").hidden = signedIn || state.mode !== "shared_token";
+  $("#session").hidden = !signedIn;
+  $("#analyze").disabled = !signedIn;
+  $("#whoami").textContent = signedIn ? (state.mode === "operators" ? `Signed in as ${state.actor} (${state.role})` : `Acting as ${state.actor || "(no name)"}, unverified`) : "";
+}
+
+async function signIn(token, actor, role) {
+  Object.assign(state, { token, actor, role, signature: "" });
+  sessionStorage.setItem("sentinel_token", token); // cleared when the tab closes
+  sessionStorage.setItem("sentinel_actor", actor);
+  sessionStorage.setItem("sentinel_role", role || "");
+  showForms();
+  await refresh(true);
+  schedule();
+}
+
+function signOut() {
+  Object.assign(state, { token: "", actor: "", role: "", incidents: [], selected: null });
+  for (const k of ["sentinel_token", "sentinel_actor", "sentinel_role"]) sessionStorage.removeItem(k);
+  clearInterval(state.timer);
+  $("#quality").hidden = true;
+  showForms();
+  render();
+}
+
+$("#login").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  setStatus("Signing in...");
+  try {
+    const res = await fetch("/api/v1/auth/login", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: $("#username").value.trim(), password: $("#password").value }) });
+    const data = await res.json().catch(() => null);
+    $("#password").value = "";
+    if (!res.ok) throw new Error((data && data.detail) || `HTTP ${res.status}`);
+    await signIn(data.token, data.username, data.role);
+    setStatus(`Signed in. Session ends ${fmtTime(data.expires_at)}.`);
+  } catch (err) {
+    setStatus(`Sign-in failed: ${err.message}`, true);
+  }
+});
 $("#connect").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  state.token = $("#token").value.trim();
-  state.actor = $("#actor").value.trim();
-  sessionStorage.setItem("sentinel_token", state.token); // cleared when the tab closes
-  localStorage.setItem("sentinel_actor", state.actor);
-  $("#analyze").disabled = !state.token;
-  state.signature = "";
-  setStatus("Connecting...");
-  await refresh(true);
+  await signIn($("#token").value.trim(), $("#actor").value.trim(), "");
   if (!$("#status").classList.contains("error")) setStatus("Connected.");
-  schedule();
+});
+$("#logout").addEventListener("click", async () => {
+  if (state.mode === "operators") await api("/api/v1/auth/logout", { method: "POST" }).catch(() => null);
+  signOut();
+  setStatus("Signed out.");
 });
 $("#analyze").addEventListener("click", () => run("Analyze", () => api("/api/v1/incidents/analyze", { method: "POST" })));
 $("#auto").addEventListener("change", schedule);
-if (state.token) { $("#analyze").disabled = false; refresh(true).then(schedule); }
+
+fetch("/api/v1/auth/mode").then((r) => r.json()).then((m) => {
+  state.mode = m.mode;
+  if (m.mode === "operators" && !m.login_configured) setStatus("Sign-in is not configured on this server (SENTINEL_SESSION_SECRET is unset).", true);
+  showForms();
+  if (state.token) refresh(true).then(schedule);
+}).catch(() => setStatus("Cannot reach the API.", true));

@@ -16,21 +16,26 @@ SentinelOps AI is an AI-assisted reliability operations platform for cloud appli
 | Built and tested | Where |
 | --- | --- |
 | Demo store: 96-product catalogue, search and filters, accounts (email/password, Google when configured), checkout, orders, wishlist, password reset | [apps/shop-web](apps/shop-web) |
-| Fault injection: global (`FAULT_SCENARIO`) and scoped per request (`CHAOS_TOKEN`), faults S01, S03, S05, S08 | `apps/shop-web/src/lib/faults.ts` |
-| Telemetry: structured logs and OpenTelemetry-style traces pushed to SentinelOps | `apps/shop-web/src/lib/log.ts`, `trace.ts` |
+| Fault injection: global (`FAULT_SCENARIO`) and scoped per request (`CHAOS_TOKEN`), faults S01-S08 and S11 as real behaviour (connection pool, cache, CPU burn, retrying payment client, clock offset) | `apps/shop-web/src/lib/faults.ts`, `pool.ts`, `cache.ts`, `payment.ts` |
+| Telemetry: structured logs and OpenTelemetry-style traces (with per-request CPU time) pushed to SentinelOps | `apps/shop-web/src/lib/log.ts`, `trace.ts` |
 | Ingestion: JSON, text, normalized, span and metric adapters; idempotent | [services/sentinel-api](services/sentinel-api) |
-| Detection, incident grouping, ranked hypotheses, evidence ledger, per-symptom attribution | `app/analysis/` |
-| Falsification tests (logs, metrics and traces) and the investigation loop | `app/analysis/diagnostics.py` |
+| Detection, incident grouping, eight ranked cause hypotheses, evidence ledger, per-symptom attribution | `app/analysis/` |
+| Telemetry-quality check (clock running ahead) | `app/analysis/quality.py` |
+| Failure-propagation graph and earliest containment point, scored against ground truth | `app/analysis/propagation.py` |
+| Eight falsification tests (logs, metrics and traces) and the investigation loop | `app/analysis/diagnostics.py` |
 | Policy engine, recovery contracts, four-eyes approval, audit trail, SLO verification | `app/recovery/` |
+| Recovery rehearsal (counterfactual replay, gates approval) and rollback of failed actions | `app/recovery/rehearsal.py`, `contracts.py` |
+| Operator sign-in with roles (viewer, responder, approver, admin); machine token limited to ingest and analysis | `app/auth.py` |
 | Incident-to-prevention compiler with human review | `app/prevention.py` |
 | Learned root-cause model: notebook, model card, shadow mode in the API, incident labels | [notebook](services/sentinel-api/notebooks/root_cause_model.ipynb), [model card](services/sentinel-api/models/MODEL_CARD.md) |
-| Dashboard | `app/ui/` |
+| Dashboard with sign-in | `app/ui/` |
 | Benchmark against baselines (simulated) | [docs/benchmark-results.md](docs/benchmark-results.md) |
 | Labelled-incident campaign and evaluation on the live system | [docs/real-incidents.md](docs/real-incidents.md) |
+| CI (tests, lint, typecheck, benchmark smoke run, image build), local stack | [.github/workflows/ci.yml](.github/workflows/ci.yml), [docker-compose.yml](docker-compose.yml) |
 
-**Headline results, with their limits.** On the simulated benchmark SentinelOps names the right cause in 100% of determinable scenarios against 60% for a naive alert correlator, and its falsification loop removes every wrong action on the probe scenarios; the scenarios were written by the same author as the system. On 12 real labelled incidents from the live system the rule engine was right 11 times and the learned shadow model 12 times, with no wrong recovery action from either; 12 incidents give wide intervals (see the report).
+**Headline results, with their limits.** On the simulated benchmark (12 scenarios plus 2 probes, 20 seeds each), full SentinelOps names the right cause in 179/180 determinable runs (99%) against 33% for a naive log-based alert correlator, proposes a wrong recovery action in 0/200 fault runs against 42%, names the true origin as the earliest containment point in 157/160 runs, and flags the clock-skew scenario every time with no false warnings in 260 other runs. Rehearsal alone halves wrong actions (20% to 10%) and removes them on the probes. The scenarios were written by the same author as the system, and SentinelOps reads traces that the baselines do not, so these numbers show the mechanisms work, not that they generalize. On 12 real labelled incidents from the live system the rule engine was right 11 times and the learned shadow model 12 times, with no wrong recovery action from either; 12 incidents give wide intervals (see the report).
 
-**Not built:** recovery rehearsal in a sandbox copy, failure-propagation graph, rollback of failed actions, real authentication for SentinelOps operators, the LLM-only baseline run (needs an API key), scenarios S02, S04, S06, S07, S11. The learned model runs in shadow mode only and never drives a decision.
+**Not built or not yet run:** the LLM-only baseline run (needs an `ANTHROPIC_API_KEY`); the live campaign for S02, S04, S06, S07 and S11 (the code is ready; it runs after the new shop and API are deployed); single sign-on and multiple tenants; a sandbox *copy* of production (rehearsal replays recorded telemetry instead); a production executor (out of scope by design); retraining the learned model on the four new causes. The learned model runs in shadow mode only and never drives a decision.
 
 ## Research question
 
@@ -231,18 +236,18 @@ runbooks/  migrations/  tests/{unit,integration,e2e,security,load}  docs/  .gith
 
 ## Acceptance checklist
 
-- [ ] Tester can complete the simulated shopping journey
-- [ ] Key requests are traceable across services
-- [ ] Each fault scenario reliably produces its expected symptoms
-- [ ] Hypotheses and evidence IDs resolve to real data; counterevidence and missing data are shown
-- [ ] LLM failure does not erase incident or telemetry records
-- [ ] Unknown evidence IDs and non-allow-listed actions are rejected
-- [ ] Approval identity and decision are audited
-- [ ] Recovery verification uses measured SLIs over the full window
-- [ ] Sandbox resources are cleaned up on success, failure and timeout
-- [ ] Ground truth is never exposed to the diagnosis agent
-- [ ] Benchmark reports baselines, failures, latency and cost
-- [ ] Deployment has HTTPS, secrets management, backups and spend alerts
+- [x] Tester can complete the simulated shopping journey (live store; checkout route tests and a Playwright browse-to-cart test)
+- [x] Key requests are traceable (one trace per request with pool, query, payment and cache spans; the shop is a single service)
+- [ ] Each fault scenario reliably produces its expected symptoms: verified live for S01, S03, S05, S08; S02, S04, S06, S07, S11 verified in unit tests and the simulator, live campaign pending deployment
+- [x] Hypotheses and evidence IDs resolve to real data; counterevidence and missing data are shown
+- [x] LLM failure does not erase incident or telemetry records (no LLM is in the decision path)
+- [x] Unknown evidence IDs and non-allow-listed actions are rejected
+- [x] Approval identity and decision are audited (signed-in operators; `X-Actor` is ignored)
+- [x] Recovery verification uses measured SLIs over the full window
+- [x] Sandbox resources are cleaned up: not applicable, rehearsal replays stored telemetry and creates no resources
+- [x] Ground truth is never exposed to the diagnosis agent (tested for every scenario)
+- [x] Benchmark reports baselines, failures, latency and cost (LLM tokens once the LLM baseline is run)
+- [ ] Deployment has HTTPS and secrets management (done); backups and spend alerts are account settings on Neon, Render and Vercel to switch on
 
 ## Novelty caveat
 

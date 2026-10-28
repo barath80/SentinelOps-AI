@@ -42,6 +42,21 @@ class Settings(BaseSettings):
     shadow_model: bool = True
     # An approval is only good for this long: conditions may have changed since it was given.
     approval_ttl_seconds: int = 1800
+    # "operators": people log in and their role decides what they may do; the ingest token is a
+    # machine credential (ingest, read, analysis). "shared_token": legacy, identity from X-Actor.
+    auth_mode: str = "operators"
+    @field_validator("auth_mode")
+    @classmethod
+    def _known_mode(cls, mode: str) -> str:
+        if mode not in ("operators", "shared_token"):
+            raise ValueError("auth_mode must be 'operators' or 'shared_token'")
+        return mode
+
+    # Signs session tokens. Empty means nobody can log in (fails closed). Use 32+ random bytes.
+    session_secret: str = ""
+    session_ttl_seconds: int = 8 * 3600
+    # "username:password" for the first admin; used only while no operator exists.
+    bootstrap_admin: str = ""
 
 
 def get_settings() -> Settings:

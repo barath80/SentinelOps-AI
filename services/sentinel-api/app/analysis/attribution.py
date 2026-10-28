@@ -17,11 +17,12 @@ from .detect import IncidentCandidate, Sample
 from .hypotheses import build_hypotheses, compute_features, rank
 
 
-def attribute(cand: IncidentCandidate, samples: list[Sample], timeouts: list[tuple[str, datetime]]) -> dict:
+def attribute(cand: IncidentCandidate, samples: list[Sample], timeouts: list[tuple[str, datetime]],
+              retries: list[tuple[str, datetime, str | None]] = ()) -> dict:
     symptoms = []
     for a in cand.anomalies:
         sub = IncidentCandidate([a], a.onset, cand.recent_start, cand.as_of)
-        ranked, assessment = rank(build_hypotheses(sub, compute_features(sub, samples, timeouts)))
+        ranked, assessment = rank(build_hypotheses(sub, compute_features(sub, samples, timeouts, retries)))
         top = ranked[0]
         symptoms.append({
             "route": a.route, "kind": a.kind,

@@ -157,6 +157,37 @@ class ActionRunRow(Base):
     output: Mapped[dict] = mapped_column(JSON)
 
 
+class RehearsalRow(Base):
+    """A counterfactual replay of the contract's action on recorded telemetry. Simulation evidence only."""
+
+    __tablename__ = "rehearsal_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    contract_id: Mapped[str] = mapped_column(ForeignKey("recovery_contracts.id", ondelete="CASCADE"), index=True)
+    model_version: Mapped[str] = mapped_column(String(20))
+    outcome: Mapped[str] = mapped_column(String(14))  # pass | fail | inconclusive
+    reason: Mapped[str] = mapped_column(Text)
+    details: Mapped[dict] = mapped_column(JSON)
+    requested_by: Mapped[str] = mapped_column(String(100))
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class RollbackRunRow(Base):
+    __tablename__ = "rollback_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    # unique: a contract is rolled back at most once
+    contract_id: Mapped[str] = mapped_column(ForeignKey("recovery_contracts.id", ondelete="CASCADE"), unique=True)
+    rollback_template: Mapped[str] = mapped_column(String(60))
+    executor: Mapped[str] = mapped_column(String(30))
+    requested_by: Mapped[str] = mapped_column(String(100))
+    reason: Mapped[str] = mapped_column(Text, default="")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(14))  # running | succeeded | failed
+    output: Mapped[dict] = mapped_column(JSON)
+
+
 class VerificationRow(Base):
     __tablename__ = "verification_runs"
 
@@ -180,6 +211,22 @@ class IncidentLabelRow(Base):
     labeled_by: Mapped[str] = mapped_column(String(100))
     note: Mapped[str] = mapped_column(Text, default="")
     labeled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class OperatorRow(Base):
+    """A person who can log in to SentinelOps. Passwords are scrypt hashes, never stored in clear."""
+
+    __tablename__ = "operators"
+
+    username: Mapped[str] = mapped_column(String(100), primary_key=True)
+    password_hash: Mapped[str] = mapped_column(String(200))
+    role: Mapped[str] = mapped_column(String(12))  # viewer | responder | approver | admin
+    disabled: Mapped[bool] = mapped_column(default=False)
+    created_by: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Sessions issued before this moment are invalid (logout, password change, disabling).
+    sessions_valid_after: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class PreventionArtifactRow(Base):

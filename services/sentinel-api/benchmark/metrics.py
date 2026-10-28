@@ -7,6 +7,11 @@ from collections import defaultdict
 from .scenarios import Scenario, truly_recovered
 from .systems import SystemResult
 
+# Where each cause's failure starts, in the propagation graph's node names (ground truth).
+ORIGIN_FOR_CAUSE = {"release_regression": "service-code", "slow_dependency": "postgres", "db_pool_exhaustion": "postgres-pool",
+                    "cache_unavailable": "cache", "payment_provider_timeout": "payment-provider",
+                    "retry_storm": "payment-provider", "resource_saturation": "compute"}
+
 
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     if n == 0:
@@ -37,6 +42,14 @@ def score_run(system: str, s: Scenario, seed: int, r: SystemResult) -> dict:
         "incompleteness_acknowledged": len(s.truth_causes) > 1 and not set(r.causes) >= s.truth_causes and r.unexplained > 0,
         "claims_to_explain_all": len(s.truth_causes) > 1 and not set(r.causes) >= s.truth_causes and r.cause is not None and r.unexplained == 0,
         "false_diagnosis": s.has_fault and r.cause is not None and r.cause not in s.truth_causes,
+        "telemetry_fault": s.telemetry_fault,
+        # scored only for systems that name a containment point, on single-cause faults
+        "origin_scored": r.origin is not None and len(s.truth_causes) == 1,
+        "origin_correct": r.origin is not None and len(s.truth_causes) == 1
+                          and r.origin == ORIGIN_FOR_CAUSE.get(next(iter(s.truth_causes))),
+        "origin": r.origin,
+        "telemetry_issue_flagged": s.telemetry_fault and r.telemetry_warnings > 0,
+        "spurious_telemetry_warning": not s.telemetry_fault and r.telemetry_warnings > 0,
         "correct_abstention": s.ambiguous and r.detected and r.cause is None,
         "wrongful_abstention": determinable and r.detected and r.cause is None,
         "incorrect_intervention": executed and r.action not in s.safe_actions,
@@ -62,6 +75,9 @@ RATES = [
     ("incorrect_intervention_rate", lambda x: x["incorrect_intervention"], lambda x: x["has_fault"], "wrong action proposed (all faults)"),
     ("false_success_rate", lambda x: x["false_success"], lambda x: x["executed"], "claimed recovery that did not happen (of executed actions)"),
     ("verified_recovery_rate", lambda x: x["verified_recovery"], lambda x: x["has_fault"], "recovery truly achieved and correctly claimed"),
+    ("containment_point_accuracy", lambda x: x["origin_correct"], lambda x: x["origin_scored"], "earliest containment point is the true origin (single-cause faults)"),
+    ("telemetry_issue_flagged_rate", lambda x: x["telemetry_issue_flagged"], lambda x: x["telemetry_fault"], "data problem reported (telemetry faults)"),
+    ("spurious_telemetry_warning_rate", lambda x: x["spurious_telemetry_warning"], lambda x: not x["telemetry_fault"], "data problem reported on sound telemetry"),
 ]
 
 

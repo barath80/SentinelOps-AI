@@ -1,5 +1,3 @@
-import hmac
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
@@ -7,7 +5,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
@@ -16,7 +14,8 @@ from sqlalchemy.dialects import postgresql, sqlite
 
 from .adapters import ADAPTERS
 from .config import Settings, get_settings
-from . import maintenance, prevention
+from . import auth as auth_mod, maintenance, prevention
+from .analysis import quality
 from .analysis.diagnostics import TESTS, investigate, run_test
 from .analysis.service import analyze
 from .db import DiagnosticRunRow, EventRow, EvidenceRow, IncidentLabelRow, HypothesisRow, IncidentRow, make_session_factory
@@ -37,14 +36,12 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
         if task:
             task.cancel()
 
-    app = FastAPI(title="SentinelOps API", version="0.1.0", lifespan=lifespan)
-
-    def require_token(authorization: Annotated[str | None, Header()] = None) -> None:
-        expected = settings.ingest_token
-        supplied = (authorization or "").removeprefix("Bearer ").strip()
-        # Fail closed when no token is configured; constant-time compare otherwise.
-        if not expected or not hmac.compare_digest(supplied, expected):
-            raise HTTPException(status_code=401, detail="invalid_token")
+    app = FastAPI(title="SentinelOps API", version="0.2.0", lifespan=lifespan)
+    # Fails closed: no ingest token means no machine access, no session secret means no logins.
+    auth = auth_mod.Auth(settings, sessions)
+    auth_mod.bootstrap(sessions, settings)
+    auth.register(app)
+    READ, ANALYZE = [Depends(auth.require("read"))], [Depends(auth.require("analyze"))]
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -55,7 +52,7 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
         # The API has no page of its own; send people to the dashboard.
         return RedirectResponse("/ui/", status_code=307)
 
-    @app.post("/api/v1/telemetry/events", response_model=IngestResult, dependencies=[Depends(require_token)])
+    @app.post("/api/v1/telemetry/events", response_model=IngestResult, dependencies=[Depends(auth.require("ingest"))])
     async def ingest(
         request: Request,
         adapter: Annotated[str, Query(description="Source adapter name")] = "normalized",
@@ -99,7 +96,7 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
                 accepted = _insert_ignore_duplicates(session, rows)
         return IngestResult(accepted=accepted, duplicates=len(rows) - accepted, rejected=len(errors), errors=errors[:20])
 
-    @app.get("/api/v1/telemetry/events", response_model=list[EventOut], dependencies=[Depends(require_token)])
+    @app.get("/api/v1/telemetry/events", response_model=list[EventOut], dependencies=READ)
     def list_events(
         service: str | None = None,
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
@@ -114,6 +111,16 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
             stmt = stmt.where(EventRow.service_name == service)
         with sessions() as session:
             return [EventOut.model_validate(r, from_attributes=True) for r in session.scalars(stmt)]
+
+    @app.get("/api/v1/telemetry/quality", dependencies=READ)
+    def telemetry_quality(window_seconds: Annotated[int, Query(ge=60, le=86400)] = 900) -> dict:
+        """Clock-skew check over recently stamped events (scenario S11)."""
+        now = datetime.now(timezone.utc)
+        stmt = select(EventRow).where(EventRow.tenant_id == settings.default_tenant_id,
+                                      EventRow.event_time >= now - timedelta(seconds=window_seconds),
+                                      EventRow.event_time <= now + timedelta(seconds=settings.max_future_skew_seconds))
+        with sessions() as session:
+            return {"window_seconds": window_seconds, "as_of": now.isoformat(), **quality.assess(list(session.scalars(stmt)))}
 
     def load_incident(session, inc: IncidentRow) -> IncidentOut:
         hyps = list(session.scalars(select(HypothesisRow).where(HypothesisRow.incident_id == inc.id).order_by(HypothesisRow.score.desc())))
@@ -136,14 +143,14 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
             raise HTTPException(status_code=404, detail="not_found")
         return inc
 
-    @app.post("/api/v1/maintenance/purge", dependencies=[Depends(require_token)])
+    @app.post("/api/v1/maintenance/purge", dependencies=[Depends(auth.require("admin"))])
     def purge(days: Annotated[int, Query(ge=0, le=3650, description="Delete events older than this; 0 = the configured retention")] = 0) -> dict:
         keep_days = days or settings.retention_days
         with sessions.begin() as session:
             return maintenance.purge_events(session, settings.default_tenant_id,
                                             datetime.now(timezone.utc) - timedelta(days=keep_days))
 
-    @app.post("/api/v1/incidents/{incident_id}/diagnostics", response_model=IncidentOut, dependencies=[Depends(require_token)])
+    @app.post("/api/v1/incidents/{incident_id}/diagnostics", response_model=IncidentOut, dependencies=ANALYZE)
     def run_diagnostic(incident_id: str, body: DiagnosticRequest) -> IncidentOut:
         if body.test_id not in TESTS:  # allow-list: unknown ids are rejected, never interpreted
             raise HTTPException(status_code=400, detail=f"unknown_test: {body.test_id}")
@@ -152,13 +159,8 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
             run_test(session, inc, body.test_id)
             return load_incident(session, inc)
 
-    def actor(x_actor: Annotated[str | None, Header()] = None) -> str:
-        if not x_actor or not re.match(r"^[A-Za-z0-9_.@-]{1,100}$", x_actor):
-            raise HTTPException(status_code=400, detail="x_actor_header_required")
-        return x_actor
-
-    @app.post("/api/v1/incidents/{incident_id}/label", dependencies=[Depends(require_token)])
-    def label_incident(incident_id: str, body: LabelRequest, who: Annotated[str, Depends(actor)]) -> IncidentOut:
+    @app.post("/api/v1/incidents/{incident_id}/label")
+    def label_incident(incident_id: str, body: LabelRequest, who: Annotated[str, Depends(auth.actor("act"))]) -> IncidentOut:
         with sessions.begin() as session:
             inc = own_incident(session, incident_id)
             row = session.get(IncidentLabelRow, inc.id)
@@ -170,7 +172,7 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
             session.flush()
             return load_incident(session, inc)
 
-    @app.get("/api/v1/training/labelled", dependencies=[Depends(require_token)])
+    @app.get("/api/v1/training/labelled", dependencies=READ)
     def labelled() -> list[dict]:
         """Labelled incidents with the features the model sees: an evaluation set from real traffic."""
         with sessions() as session:
@@ -179,13 +181,21 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
             out = []
             for lab, inc in session.execute(q):
                 shadow = (inc.summary or {}).get("shadow_model") or {}
+                # The answer after the read-only investigation, if one ran (it can differ from rule_answer).
+                tested = session.scalar(select(DiagnosticRunRow.id).where(DiagnosticRunRow.incident_id == inc.id).limit(1))
+                top = session.scalars(select(HypothesisRow).where(HypothesisRow.incident_id == inc.id)
+                                      .order_by(HypothesisRow.score.desc())).first() if tested else None
+                investigated = (top.cause_key if top and inc.assessment == "leading_hypothesis" and top.status == "leading"
+                                else "unknown") if tested else None
+                containment = ((inc.summary or {}).get("propagation") or {}).get("earliest_containment") or {}
                 out.append({"incident_id": inc.id, "label": lab.label, "labeled_by": lab.labeled_by, "labeled_at": lab.labeled_at.isoformat(),
                             "note": lab.note, "started_at": inc.started_at.isoformat(), "title": inc.title,
                             "features": (inc.summary or {}).get("model_features"), "rule_answer": (inc.summary or {}).get("rule_answer"),
+                            "investigated_answer": investigated, "containment": containment.get("node"),
                             "shadow_prediction": shadow.get("prediction"), "shadow_version": shadow.get("version")})
             return out
 
-    @app.get("/api/v1/shadow/report", dependencies=[Depends(require_token)])
+    @app.get("/api/v1/shadow/report", dependencies=READ)
     def shadow_report() -> dict:
         """How often the shadow model agrees with the rule engine, and with human labels."""
         with sessions() as session:
@@ -205,14 +215,14 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
                 "rules_accuracy": round(rules_ok / len(judged), 3) if judged else None,
                 "note": "Shadow predictions are recorded only; they never change rankings, recommendations or actions."}
 
-    @app.post("/api/v1/incidents/{incident_id}/investigate", dependencies=[Depends(require_token)])
+    @app.post("/api/v1/incidents/{incident_id}/investigate", dependencies=ANALYZE)
     def run_investigation(incident_id: str, body: InvestigateRequest | None = None) -> dict:
         with sessions.begin() as session:
             inc = own_incident(session, incident_id)
             report = investigate(session, inc, (body or InvestigateRequest()).budget)
             return {"report": report, "incident": load_incident(session, inc).model_dump(mode="json")}
 
-    @app.post("/api/v1/incidents/analyze", response_model=list[IncidentOut], dependencies=[Depends(require_token)])
+    @app.post("/api/v1/incidents/analyze", response_model=list[IncidentOut], dependencies=ANALYZE)
     def run_analysis(
         window_seconds: Annotated[int, Query(ge=60, le=86400)] = 900,
         as_of: Annotated[datetime | None, Query(description="Analyze as of this time (default: now)")] = None,
@@ -225,14 +235,14 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
             incidents = [session.get(IncidentRow, i) for i in ids]
             return [load_incident(session, i) for i in incidents if i]
 
-    @app.get("/api/v1/incidents", response_model=list[IncidentOut], dependencies=[Depends(require_token)])
+    @app.get("/api/v1/incidents", response_model=list[IncidentOut], dependencies=READ)
     def list_incidents(limit: Annotated[int, Query(ge=1, le=100)] = 20) -> list[IncidentOut]:
         stmt = (select(IncidentRow).where(IncidentRow.tenant_id == settings.default_tenant_id)
                 .order_by(IncidentRow.started_at.desc()).limit(limit))
         with sessions() as session:
             return [load_incident(session, i) for i in session.scalars(stmt)]
 
-    @app.get("/api/v1/incidents/{incident_id}", response_model=IncidentOut, dependencies=[Depends(require_token)])
+    @app.get("/api/v1/incidents/{incident_id}", response_model=IncidentOut, dependencies=READ)
     def get_incident(incident_id: str) -> IncidentOut:
         with sessions() as session:
             inc = session.get(IncidentRow, incident_id)
@@ -244,8 +254,8 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
     if executor is None:
         executor = (ShopAdminExecutor(settings.shop_admin_url, settings.shop_admin_token)
                     if settings.executor == "shop_admin" else MockExecutor())
-    recovery_api.register(app, settings, sessions, require_token, executor)
-    prevention.register(app, settings.default_tenant_id, sessions, require_token)
+    recovery_api.register(app, settings, sessions, auth, executor)
+    prevention.register(app, settings.default_tenant_id, sessions, auth)
 
     # Dashboard: static files served same-origin. The CSP forbids inline script and any outside host.
     app.mount("/ui", StaticFiles(directory=Path(__file__).parent / "ui", html=True), name="ui")

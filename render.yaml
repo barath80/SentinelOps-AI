@@ -1,4 +1,4 @@
-# Render Blueprint for the SentinelOps API. Not yet applied: review before use.
+# Render Blueprint for the SentinelOps API.
 services:
   - type: web
     name: sentinelops-api
@@ -9,7 +9,13 @@ services:
     envVars:
       - key: SENTINEL_DATABASE_URL   # Postgres connection string (for example Neon)
         sync: false
-      - key: SENTINEL_INGEST_TOKEN   # long random secret; the shop and the dashboard use it
+      - key: SENTINEL_INGEST_TOKEN   # machine token: the shop's telemetry push and automation (no human actions)
+        sync: false
+      - key: SENTINEL_AUTH_MODE      # people sign in; roles decide what they may do
+        value: operators
+      - key: SENTINEL_SESSION_SECRET # signs operator sessions; empty would disable sign-in
+        generateValue: true
+      - key: SENTINEL_BOOTSTRAP_ADMIN  # "username:password" for the first admin; used only while no operator exists
         sync: false
       - key: SENTINEL_EXECUTOR
         value: mock

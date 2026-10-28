@@ -67,7 +67,7 @@ def tick(sessions: sessionmaker, settings: Settings, now: datetime | None = None
                 inc = s.get(IncidentRow, i)
                 has_runs = s.scalar(select(DiagnosticRunRow.id).where(DiagnosticRunRow.incident_id == i))
                 if inc and inc.status == "open" and not has_runs:
-                    investigate(s, inc, budget=3)
+                    investigate(s, inc, budget=4)
                     out["investigated"] += 1
     if purge and settings.retention_days > 0:
         with sessions.begin() as s:

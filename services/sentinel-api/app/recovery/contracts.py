@@ -6,6 +6,8 @@ Invariants enforced here (and tested):
   * the proposer cannot approve their own contract (four eyes)
   * an action runs at most once per contract (unique action_runs.contract_id + state claim)
   * the outcome (pass / fail / inconclusive) comes only from measured SLIs after the action
+  * a rehearsal predicting failure must be explicitly acknowledged by the approver
+  * the pre-action state is captured before the action runs; a rollback restores it, at most once
 """
 from __future__ import annotations
 
@@ -17,9 +19,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..analysis.detect import samples_from_rows
-from ..db import (ActionRunRow, ApprovalRow, ContractRow, EventRow, HypothesisRow, IncidentRow, TransitionRow,
-                  VerificationRow)
-from . import slo
+from ..db import (ActionRunRow, ApprovalRow, ContractRow, EventRow, HypothesisRow, IncidentRow, RehearsalRow,
+                  RollbackRunRow, TransitionRow, VerificationRow)
+from . import rehearsal, slo
 from .executors import Executor
 from .policy import CATALOGUE, POLICY_VERSION, RECOMMENDED_ACTION, evaluate
 
@@ -29,9 +31,13 @@ ALLOWED: dict[str, set[str]] = {
     "READY_FOR_ACTION": {"EXECUTING"},
     "EXECUTING": {"VERIFYING", "FAILED"},
     "VERIFYING": {"SUCCEEDED", "FAILED", "INCONCLUSIVE"},
+    # A rollback is part of the approved plan, so it needs no second approval; it is still audited.
+    "FAILED": {"ROLLING_BACK"},
+    "INCONCLUSIVE": {"ROLLING_BACK"},
+    "ROLLING_BACK": {"ROLLED_BACK", "ROLLBACK_FAILED"},
 }
-ACTIVE = {"AWAITING_APPROVAL", "READY_FOR_ACTION", "EXECUTING", "VERIFYING"}
-FINAL = {"SUCCEEDED", "FAILED", "INCONCLUSIVE"}
+ACTIVE = {"AWAITING_APPROVAL", "READY_FOR_ACTION", "EXECUTING", "VERIFYING", "ROLLING_BACK"}
+FINAL = {"SUCCEEDED", "FAILED", "INCONCLUSIVE", "ROLLED_BACK", "ROLLBACK_FAILED"}
 OUTCOME_FOR_STATE = {"SUCCEEDED": "pass", "FAILED": "fail", "INCONCLUSIVE": "inconclusive"}
 
 
@@ -126,13 +132,15 @@ def create_contract(session: Session, tenant_id: str, incident_id: str, action_t
     elif leader and RECOMMENDED_ACTION.get(leader.cause_key) != action_template:
         warnings.append("action_not_recommended_for_leading_hypothesis")
 
+    spec = CATALOGUE.get(action_template)
+    if spec and spec.reverts:
+        raise ContractError("rollback_only_action", 400, {"detail": f"{action_template} only runs as the rollback of {spec.reverts}"})
     active = session.scalar(select(ContractRow.id).where(ContractRow.incident_id == inc.id, ContractRow.state.in_(ACTIVE)))
     if active:
         raise ContractError("active_contract_exists", 409, {"contract_id": active})
 
     decision = evaluate(action_template, environment)
     success, guard, slo_basis = default_slos(inc)
-    spec = CATALOGUE.get(action_template)
     contract_id = str(uuid.uuid4())
     body = {
         "contract_id": contract_id, "incident_id": inc.id, "action_template": action_template, "environment": environment,
@@ -145,7 +153,7 @@ def create_contract(session: Session, tenant_id: str, incident_id: str, action_t
                    "blast_radius": decision.blast_radius},
         "basis": {"assessment": inc.assessment, "leading_cause": leader.cause_key if leader else None,
                   "hypothesis_score": leader.score if leader else None, "score_is_probability": False},
-        "warnings": warnings, "verification_window": None,
+        "warnings": warnings, "verification_window": None, "rehearsal": None, "pre_action_snapshot": None,
     }
     row = ContractRow(id=contract_id, tenant_id=tenant_id, incident_id=inc.id, action_template=action_template[:60],
                       environment=environment, state="VALIDATED", outcome="pending", proposed_by=proposed_by,
@@ -160,20 +168,50 @@ def create_contract(session: Session, tenant_id: str, incident_id: str, action_t
         # Returned, not raised: the BLOCKED contract and its audit trail must be committed.
         # Callers map state == "BLOCKED" to an HTTP 403.
         return row
+    _rehearse(session, row, inc, "rehearsal-engine")
     transition(session, row, "AWAITING_APPROVAL" if decision.approval_required else "READY_FOR_ACTION", "policy-engine",
                "approval required by policy" if decision.approval_required else "no approval required")
     return row
 
 
-def approve(session: Session, tenant_id: str, contract_id: str, reviewer: str, decision: str, comment: str) -> ContractRow:
+def _rehearse(session: Session, row: ContractRow, inc: IncidentRow, actor: str) -> dict:
+    result = rehearsal.rehearse(session, inc, row.action_template, row.contract)
+    session.add(RehearsalRow(id=str(uuid.uuid4()), contract_id=row.id, model_version=result["model_version"],
+                             outcome=result["outcome"], reason=result["reason"], details=result["details"],
+                             requested_by=actor, at=_now()))
+    body = dict(row.contract)
+    body["rehearsal"] = {k: result[k] for k in ("outcome", "reason", "model_version", "label")} | {"at": _now().isoformat()}
+    row.contract = body
+    session.flush()
+    return result
+
+
+def rehearse_contract(session: Session, tenant_id: str, contract_id: str, actor: str) -> dict:
+    """Re-run the rehearsal (more telemetry may have arrived). Only before the action runs."""
+    row = _get(session, tenant_id, contract_id)
+    if row.state not in ("AWAITING_APPROVAL", "READY_FOR_ACTION"):
+        raise ContractError("not_rehearsable", 409, {"state": row.state})
+    inc = session.get(IncidentRow, row.incident_id)
+    return _rehearse(session, row, inc, actor)
+
+
+def approve(session: Session, tenant_id: str, contract_id: str, reviewer: str, decision: str, comment: str,
+            acknowledge_rehearsal_failure: bool = False) -> ContractRow:
     row = _get(session, tenant_id, contract_id)
     if row.state != "AWAITING_APPROVAL":
         raise ContractError("not_awaiting_approval", 409, {"state": row.state})
     if reviewer == row.proposed_by:
         raise ContractError("four_eyes_required", 403, {"detail": "the proposer cannot approve their own contract"})
+    rehearsed = (row.contract.get("rehearsal") or {}).get("outcome")
+    if decision == "approve" and rehearsed == "fail" and not acknowledge_rehearsal_failure:
+        raise ContractError("rehearsal_failed", 409, {
+            "reason": row.contract["rehearsal"]["reason"],
+            "hint": "the replay shows this action would not meet the contract; approve only with acknowledge_rehearsal_failure"})
     session.add(ApprovalRow(id=str(uuid.uuid4()), contract_id=row.id, reviewer=reviewer, decision=decision,
                             comment=comment, at=_now()))
-    transition(session, row, "READY_FOR_ACTION" if decision == "approve" else "REJECTED", reviewer, comment)
+    details = {"rehearsal_outcome": rehearsed,
+               "acknowledged_rehearsal_failure": bool(acknowledge_rehearsal_failure and rehearsed == "fail")}
+    transition(session, row, "READY_FOR_ACTION" if decision == "approve" else "REJECTED", reviewer, comment, details)
     return row
 
 
@@ -206,11 +244,24 @@ def execute(sessions: sessionmaker, tenant_id: str, contract_id: str, actor: str
             raise ContractError("already_executed", 409) from exc
         action, env, timeout, run_id = row.action_template, row.environment, row.contract["timeout_seconds"], run.id
 
-    result = executor.run(action, env, timeout)
+    # Capture the state the action will change first: without it there is no rollback path, so the
+    # action is not attempted at all.
+    snapshot = executor.capture(action, env, timeout)
+    result = executor.run(action, env, timeout) if snapshot.ok else None
 
     with sessions.begin() as s:
         row = _get(s, tenant_id, contract_id)
         run = s.get(ActionRunRow, run_id)
+        if result is None:
+            run.ended_at, run.status, run.output = _now(), "failed", {"error": "pre_action_snapshot_failed", "snapshot": snapshot.output}
+            body = dict(row.contract)
+            body["outcome"] = row.outcome = "fail"
+            row.contract = body
+            transition(s, row, "FAILED", actor, "pre-action snapshot failed: the action was not attempted", snapshot.output)
+            return row.state
+        body = dict(row.contract)
+        body["pre_action_snapshot"] = {"captured_at": run.started_at.isoformat(), "state": snapshot.output}
+        row.contract = body
         run.ended_at, run.status, run.output = _now(), "succeeded" if result.ok else "failed", result.output
         if result.ok:
             body = dict(row.contract)
@@ -255,13 +306,55 @@ def verify(session: Session, tenant_id: str, contract_id: str, actor: str, as_of
     final_state = {"pass": "SUCCEEDED", "fail": "FAILED", "inconclusive": "INCONCLUSIVE"}[outcome]
     body = dict(row.contract)
     body["outcome"] = row.outcome = outcome
+    # A breached guardrail means the action itself may be doing harm: undoing it is the first move.
+    body["rollback_recommended"] = outcome == "fail" and reason.startswith("guardrail breached")
     row.contract = body
     transition(session, row, final_state, actor, reason)
     if outcome == "pass":
         inc = session.get(IncidentRow, row.incident_id)
         if inc:
             inc.status = "resolved"
-    return {"outcome": outcome, "state": row.state, "reason": reason, "final": True, "predicates": details}
+    return {"outcome": outcome, "state": row.state, "reason": reason, "final": True, "predicates": details,
+            "rollback_recommended": body["rollback_recommended"]}
+
+
+def rollback(sessions: sessionmaker, tenant_id: str, contract_id: str, actor: str, executor: Executor, reason: str) -> str:
+    """Restore the state captured before the action. The contract's outcome is unchanged: a rollback
+    undoes a change, it does not recover the incident (which stays open)."""
+    with sessions.begin() as s:
+        row = _get(s, tenant_id, contract_id)
+        if row.state not in ("FAILED", "INCONCLUSIVE"):
+            raise ContractError("not_rollbackable", 409, {"state": row.state})
+        snap = (row.contract.get("pre_action_snapshot") or {}).get("state")
+        if snap is None:
+            raise ContractError("nothing_to_roll_back", 409, {"detail": "the action never ran, so nothing changed"})
+        template = row.contract.get("rollback_template")
+        if not template:
+            raise ContractError("no_rollback_template", 409)
+        decision = evaluate(template, row.environment)  # the rollback is policy-checked like any action
+        if not decision.allowed:
+            raise ContractError("blocked_by_policy", 403, {"reasons": decision.reasons})
+        transition(s, row, "ROLLING_BACK", actor, reason or "rollback requested", {"rollback_template": template})
+        rb = RollbackRunRow(id=str(uuid.uuid4()), contract_id=row.id, rollback_template=template, executor=executor.name,
+                            requested_by=actor, reason=reason, started_at=_now(), status="running", output={})
+        s.add(rb)
+        try:
+            s.flush()
+        except IntegrityError as exc:  # unique(contract_id): a contract is rolled back at most once
+            raise ContractError("already_rolled_back", 409) from exc
+        action, env, timeout, rb_id = row.action_template, row.environment, row.contract["timeout_seconds"], rb.id
+
+    result = executor.revert(action, env, snap, timeout)
+
+    with sessions.begin() as s:
+        row = _get(s, tenant_id, contract_id)
+        rb = s.get(RollbackRunRow, rb_id)
+        rb.ended_at, rb.status, rb.output = _now(), "succeeded" if result.ok else "failed", result.output
+        if result.ok:
+            transition(s, row, "ROLLED_BACK", actor, "pre-action state restored; the incident remains open", result.output)
+        else:
+            transition(s, row, "ROLLBACK_FAILED", actor, "rollback failed: manual intervention needed", result.output)
+        return row.state
 
 
 def get_contract(session: Session, tenant_id: str, contract_id: str) -> dict:
@@ -270,16 +363,24 @@ def get_contract(session: Session, tenant_id: str, contract_id: str) -> dict:
     transitions, approvals = q(TransitionRow, TransitionRow.at), q(ApprovalRow, ApprovalRow.at)
     run = session.scalar(select(ActionRunRow).where(ActionRunRow.contract_id == row.id))
     verifications = q(VerificationRow, VerificationRow.evaluated_at)
+    rehearsals = q(RehearsalRow, RehearsalRow.at)
+    rb = session.scalar(select(RollbackRunRow).where(RollbackRunRow.contract_id == row.id))
     return {
         "id": row.id, "incident_id": row.incident_id, "action_template": row.action_template,
         "environment": row.environment, "state": row.state, "outcome": row.outcome, "proposed_by": row.proposed_by,
         "contract": row.contract,
         "transitions": [{"from": t.from_state, "to": t.to_state, "actor": t.actor, "policy_version": t.policy_version,
-                         "note": t.note, "at": t.at.isoformat()} for t in transitions],
+                         "note": t.note, "details": t.details or {}, "at": t.at.isoformat()} for t in transitions],
         "approvals": [{"reviewer": a.reviewer, "decision": a.decision, "comment": a.comment, "at": a.at.isoformat()} for a in approvals],
         "action_run": None if run is None else {"executor": run.executor, "status": run.status, "output": run.output,
                                                 "started_at": run.started_at.isoformat(),
                                                 "ended_at": run.ended_at.isoformat() if run.ended_at else None},
         "verifications": [{"outcome": v.outcome, "reason": v.reason, "window_start": v.window_start.isoformat(),
                            "window_end": v.window_end.isoformat(), "predicates": v.predicates} for v in verifications],
+        "rehearsals": [{"outcome": r.outcome, "reason": r.reason, "model_version": r.model_version, "details": r.details,
+                        "requested_by": r.requested_by, "at": r.at.isoformat()} for r in rehearsals],
+        "rollback_run": None if rb is None else {"template": rb.rollback_template, "executor": rb.executor, "status": rb.status,
+                                                 "requested_by": rb.requested_by, "reason": rb.reason, "output": rb.output,
+                                                 "started_at": rb.started_at.isoformat(),
+                                                 "ended_at": rb.ended_at.isoformat() if rb.ended_at else None},
     }
