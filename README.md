@@ -37,6 +37,40 @@ SentinelOps AI is an AI-assisted reliability operations platform for cloud appli
 
 **Not built or not yet run:** the LLM-only baseline run (needs an `ANTHROPIC_API_KEY`); the live campaign for S02, S04, S06, S07 and S11 (the code is ready; it runs after the new shop and API are deployed); single sign-on and multiple tenants; a sandbox *copy* of production (rehearsal replays recorded telemetry instead); a production executor (out of scope by design); retraining the learned model on the four new causes. The learned model runs in shadow mode only and never drives a decision.
 
+## Run it
+
+```
+# Tests
+cd services/sentinel-api && pip install -r requirements.txt && python -m pytest -q
+cd apps/shop-web && npm ci && npx tsc --noEmit && npm run lint && npm test
+
+# SentinelOps API + dashboard with its own Postgres (http://localhost:8000/ui/, admin / change-me-local-only)
+docker compose up --build
+
+# Or without Docker (PowerShell: $env:NAME="value")
+cd services/sentinel-api
+SENTINEL_INGEST_TOKEN=<machine token> SENTINEL_SESSION_SECRET=<32+ random chars> \
+SENTINEL_BOOTSTRAP_ADMIN=admin:<12+ char password> python -m uvicorn app.asgi:app --port 8000
+
+# The shop locally, pushing to it, with an in-memory order store (no real database is touched)
+cd apps/shop-web && npm run build
+SHOP_DB=memory CHAOS_TOKEN=<16+ chars> ADMIN_TOKEN=<secret> SENTINEL_INGEST_URL=http://127.0.0.1:8000 \
+SENTINEL_INGEST_TOKEN=<machine token> npx next start -p 3000
+
+# Benchmark (simulated, hidden ground truth)
+cd services/sentinel-api && python -m benchmark --seeds 20 --out ../../docs/benchmark-results.md
+
+# Labelled campaign against a running shop + API (scoped faults; a responder operator labels)
+CHAOS_TOKEN=... SENTINEL_TOKEN=<machine token> SENTINEL_OPERATOR=campaign SENTINEL_OPERATOR_PASSWORD=... \
+python -m campaign.run_campaign --shop <shop> --sentinel <api> --scenarios S01 S02 S03 S04 S05 S06 S07 S08 none surge S11 --investigate
+python -m campaign.evaluate --sentinel <api>
+
+# End-to-end recovery and rollback through the real shop_admin executor (API started with
+# SENTINEL_EXECUTOR=shop_admin; use a shop instance nobody else uses: faults are switched globally)
+SHOP_ADMIN_TOKEN=... SENTINEL_TOKEN=... SENTINEL_RESPONDER=alice:... SENTINEL_APPROVER=bob:... \
+python -m campaign.e2e_recovery --shop <shop> --sentinel <api> --scenarios S01 S02 S03 S04 S05 S06 S07 --rollback S02
+```
+
 ## Research question
 
 Does falsification-guided diagnosis plus risk-aware recovery reduce incorrect interventions and failed recoveries compared with simple alert correlation and LLM-only baselines?

@@ -308,3 +308,21 @@ def test_revert_that_claims_success_but_does_not_restore_is_a_failed_rollback(tm
     check = out["rollback_run"]["output"]["verification"]
     assert check["restored"] is False and check["observed"] == {"scenario": "something_else"}
     assert "state read back differs" in out["transitions"][-1]["note"]
+
+
+def test_rehearsal_window_starts_at_the_incident_not_the_detection_window(env):
+    """Live S02 run: the fault began ~70 s into the 120 s detection window. Measuring gaps from the
+    window start called that quiet spell missing telemetry and made the rehearsal inconclusive."""
+    from tests.test_diagnostics import ingest_spans
+    from tests.test_new_scenarios import traced_baseline, with_traces
+    client, _ = env
+    late = [line(NOW - timedelta(seconds=45 - i * 4), "/api/checkout", 201, 2620) | {"request_id": f"late{i}"} for i in range(11)]
+    late += [line(NOW - timedelta(seconds=44 - i * 4), "/api/products", 200, 9, method="GET") | {"request_id": f"lp{i}"} for i in range(11)]
+    events, spans = with_traces(late, lambda e: [("db.pool.acquire", 1300, 1), ("db.query orders.lookup", 6, 1),
+                                                 ("db.pool.acquire", 1300, 1)] if e["route"] == "/api/checkout"
+                                else [("cache.get catalogue", 1, 1)], start_index=700)
+    base, base_spans = traced_baseline()
+    ingest_spans(client, base_spans + spans)
+    [inc] = run(client, base + events)
+    r = propose(client, inc, action_template="recycle_db_pool").json()["contract"]["rehearsal"]
+    assert r["outcome"] == "pass", r["reason"]

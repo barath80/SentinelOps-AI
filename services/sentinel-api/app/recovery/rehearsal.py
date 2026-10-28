@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import statistics
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -150,7 +150,9 @@ def rehearse(session: Session, incident: IncidentRow, action: str, contract: dic
     replayed, how, details = model(ctx)
     if replayed is None:
         return {**base, "outcome": "inconclusive", "reason": how, "details": details}
-    start: datetime = ctx.candidate.recent_start
+    # Replay from the incident's onset, not from the start of the detection window: a fault that
+    # began part-way through the window would otherwise look like a telemetry gap (seen live, S02).
+    start: datetime = max(ctx.candidate.recent_start, ctx.candidate.onset - timedelta(seconds=1))
     end: datetime = ctx.candidate.as_of
     adjust = lambda p: slo.Predicate(**{**p, "min_samples": min(p.get("min_samples", 5), MIN_SAMPLES[p["sli"]])})
     success = [adjust(p) for p in contract["success_conditions"]]
