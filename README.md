@@ -47,7 +47,7 @@ SentinelOps AI is an AI-assisted reliability operations platform for cloud appli
 ```
 # Tests
 cd services/sentinel-api && pip install -r requirements.txt && python -m pytest -q
-cd apps/shop-web && npm ci && npx tsc --noEmit && npm run lint && npm test
+cd apps/shop-web && npm ci && npm run typecheck && npm run lint && npm test
 cd apps/shop-web && npx playwright install chromium && npx playwright test        # shop journeys
 cd apps/shop-web && npx playwright test -c playwright.dashboard.config.ts            # dashboard (starts the API)
 

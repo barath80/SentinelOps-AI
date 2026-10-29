@@ -36,7 +36,8 @@ def render(result: dict) -> str:
         "# Benchmark results", "",
         f"Generated {meta['generated_at']} with Python {meta['python']}. "
         f"{meta['seeds']} seeds x {len(meta['scenarios'])} scenarios x {len(systems)} systems = {len(rows)} runs. "
-        "Rates are shown as `k/n = rate [Wilson 95% interval]`.", "",
+        + (f"LLM baseline model: {meta['llm']}. " if meta.get("llm") else "")
+        + "Rates are shown as `k/n = rate [Wilson 95% interval]`.", "",
         "## Read this first", "",
         "- **The scenarios were written by the same author as the system.** The rule-based hypotheses were built knowing "
         "these fault shapes, so strong results on them show the pipeline works end to end, not that it generalizes to "
@@ -54,9 +55,10 @@ def render(result: dict) -> str:
         "SentinelOps' advantage on S02, S04, S06 and S07 is that extra data, not only better reasoning.", ""]
     if meta["not_run"]:
         lines += ["**Not run:** " + "; ".join(f"{LABELS.get(k, k)} ({v})" for k, v in meta["not_run"].items()) + ".", ""]
-    lines += ["## Main scenarios (S00-S11)", "", *_table(main, systems), "",
-              "## Falsification probes (P1, P2)", "", *_table(probes, systems), "",
-              "## Answers by scenario", "",
+    lines += ["## Main scenarios (S00-S11)", "", *_table(main, systems), ""]
+    if probes:  # a --scenarios subset may leave out the probes
+        lines += ["## Falsification probes (P1, P2)", "", *_table(probes, systems), ""]
+    lines += ["## Answers by scenario", "",
               "Each cell counts what the system answered across seeds. `abstained` means it detected an incident but named no cause.", "",
               "| Scenario | Truth | " + " | ".join(LABELS.get(s, s) for s in systems) + " |",
               "| --- | --- | " + " | ".join("---" for _ in systems) + " |"]
@@ -80,6 +82,6 @@ def render(result: dict) -> str:
               "- **Rehearsal** can only block an action whose replay clearly fails; when the recorded data cannot show the effect it "
               "is inconclusive and does not block. Compare `+ rehearsal` with the plain variant to see what it adds on its own.",
               "- **S12 (unsafe action)** is covered by policy tests, not here.",
-              "- **LLM-only baseline** runs only when `ANTHROPIC_API_KEY` is set; without it the comparison to an LLM is absent, "
-              "not assumed.", ""]
+              "- **LLM-only baseline** runs only when `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` is set; without it the comparison to an "
+              "LLM is absent, not assumed. It sees the same log summary as the correlator, at temperature 0, one call per run.", ""]
     return "\n".join(lines)

@@ -1,7 +1,7 @@
 """The systems under comparison. Each receives ONLY the telemetry events (and the as-of time).
 
   alert_correlator  naive baseline: threshold alerts + "blame the latest change"
-  llm_only          baseline: an LLM reads a summary of the same telemetry (needs ANTHROPIC_API_KEY)
+  llm_only          baseline: an LLM reads a summary of the same telemetry (needs ANTHROPIC_API_KEY or GEMINI_API_KEY)
   sentinel          SentinelOps analysis, no falsification step
   sentinel_falsify  SentinelOps analysis + the falsification/investigation loop
   sentinel_rehearse SentinelOps analysis + the rehearsal gate (no falsification): an ablation
@@ -12,6 +12,7 @@ get). SentinelOps also ingests the traces, as it does on the live system.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import statistics
@@ -139,32 +140,81 @@ def summarize_for_llm(events: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def llm_provider() -> tuple[str, str, str] | None:
+    """(provider, model, key) from the environment, or None when no key is set.
+
+    ANTHROPIC_API_KEY wins; otherwise GEMINI_API_KEY. LLM_PROVIDER forces one, LLM_MODEL overrides the model."""
+    keys = {"anthropic": os.environ.get("ANTHROPIC_API_KEY"), "gemini": os.environ.get("GEMINI_API_KEY")}
+    forced = os.environ.get("LLM_PROVIDER")
+    provider = forced if forced in keys else next((p for p, k in keys.items() if k), None)
+    if not provider or not keys[provider]:
+        return None
+    model = os.environ.get("LLM_MODEL") or {"anthropic": "claude-haiku-5-5", "gemini": "gemini-3.5-flash-lite"}[provider]
+    return provider, model, keys[provider]
+
+
+def _call_llm(client: httpx.Client, provider: str, model: str, key: str, prompt: str) -> tuple[str, int]:
+    """(answer text, tokens used). Rate-limit and overload replies are retried with backoff."""
+    if provider == "gemini":
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        req = dict(headers={"x-goog-api-key": key},
+                   json={"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                         "generationConfig": {"temperature": 0, "maxOutputTokens": 1024, "responseMimeType": "application/json",
+                                              **({"thinkingConfig": {"thinkingBudget": 0}} if "2.5-flash" in model else {})}})
+    else:
+        url = "https://api.anthropic.com/v1/messages"
+        req = dict(headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+                   json={"model": model, "max_tokens": 200, "temperature": 0, "messages": [{"role": "user", "content": prompt}]})
+    for attempt in range(6):
+        try:
+            r = client.post(url, **req)
+        except httpx.TransportError:  # a timeout or dropped connection is retried like an overload
+            if attempt == 5:
+                raise
+            time.sleep(min(60, 5 * 2 ** attempt))
+            continue
+        if r.status_code not in (429, 500, 503, 529) or attempt == 5:
+            break
+        time.sleep(float(r.headers.get("retry-after") or 0) or min(60, 5 * 2 ** attempt))
+    r.raise_for_status()
+    body = r.json()
+    if provider == "gemini":
+        parts = ((body.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
+        return "".join(p.get("text", "") for p in parts), (body.get("usageMetadata") or {}).get("totalTokenCount", 0)
+    usage = body.get("usage", {})
+    return ("".join(b.get("text", "") for b in body.get("content", [])),
+            usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
+
+
 def llm_only(events: list[dict], post_events_for, *, transport=None) -> SystemResult | None:
     """Returns None when no API key is configured (the benchmark then reports the system as not run)."""
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if not key and transport is None:
+    chosen = llm_provider()
+    if chosen is None and transport is None:
         return None
+    provider, model, key = chosen or (os.environ.get("LLM_PROVIDER", "anthropic"), "test-model", "test")
     t0 = time.perf_counter()
     prompt = ("You are an SRE assistant. Below is telemetry from an online shop. Decide the most likely root cause, "
               f"or say unknown if the evidence does not support one.\nAllowed causes: {CAUSES + ['unknown']}\n\n"
               + summarize_for_llm(events)
               + '\n\nAnswer with JSON only: {"cause": "<one of the allowed causes>", "incident": true|false}')
-    with httpx.Client(transport=transport, timeout=60) as client:
-        r = client.post("https://api.anthropic.com/v1/messages",
-                        headers={"x-api-key": key or "test", "anthropic-version": "2023-06-01"},
-                        json={"model": os.environ.get("LLM_MODEL", "claude-haiku-5-5"), "max_tokens": 200,
-                              "temperature": 0, "messages": [{"role": "user", "content": prompt}]})
-    r.raise_for_status()
-    body = r.json()
-    text = "".join(b.get("text", "") for b in body.get("content", []))
+    # LLM_CACHE: a JSON file of earlier answers, so a run stopped by a quota resumes without paying twice.
+    cache_path = os.environ.get("LLM_CACHE") if transport is None else None
+    cache = json.loads(Path(cache_path).read_text(encoding="utf-8")) if cache_path and Path(cache_path).exists() else {}
+    ckey = hashlib.sha256(f"{provider}|{model}|{prompt}".encode()).hexdigest()
+    if ckey in cache:
+        text, tokens = cache[ckey]
+    else:
+        with httpx.Client(transport=transport, timeout=60) as client:
+            text, tokens = _call_llm(client, provider, model, key, prompt)
+        if cache_path:
+            cache[ckey] = [text, tokens]
+            Path(cache_path).write_text(json.dumps(cache), encoding="utf-8")
     try:
         data = json.loads(text[text.index("{"): text.rindex("}") + 1])
     except ValueError:
         data = {}
-    usage = body.get("usage", {})
     cause = data.get("cause") if data.get("cause") in CAUSES else None
-    res = SystemResult(detected=bool(data.get("incident", cause is not None)), cause=cause,
-                       llm_tokens=usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
+    res = SystemResult(detected=bool(data.get("incident", cause is not None)), cause=cause, llm_tokens=tokens)
     res.action = _safe_action(cause)
     res.claims_success = True if res.action else None  # no verification step
     res.causes = [cause] if cause else []

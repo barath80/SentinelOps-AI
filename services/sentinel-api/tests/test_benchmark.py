@@ -76,7 +76,8 @@ def test_aggregate_counts():
 
 
 def test_llm_baseline_is_skipped_without_a_key(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    for name in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "LLM_PROVIDER"):
+        monkeypatch.delenv(name, raising=False)
     assert llm_only(make_events(BY_ID["S01"], 0), None) is None
 
 
@@ -100,6 +101,20 @@ def test_llm_baseline_tolerates_garbage_and_unknown_causes():
     assert llm_only(make_events(BY_ID["S01"], 0), None, transport=invented).cause is None  # not on the allowed list
 
 
+def test_llm_baseline_speaks_gemini(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"], body = str(request.url), json.loads(request.content)
+        assert "S01" not in body["contents"][0]["parts"][0]["text"]
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": '{"cause": "release_regression", "incident": true}'}]}}],
+                                         "usage_metadata": {}, "usageMetadata": {"totalTokenCount": 250}})
+
+    r = llm_only(make_events(BY_ID["S01"], 0), None, transport=httpx.MockTransport(handler))
+    assert "generativelanguage.googleapis.com" in seen["url"] and r.cause == "release_regression" and r.llm_tokens == 250
+
+
 def test_end_to_end_small_run_and_report():
     result = run_benchmark(seeds=1, systems=["alert_correlator", "sentinel", "sentinel_falsify"], scenarios=["S01", "S09", "P1"])
     by = {(r["scenario"], r["system"]): r for r in result["runs"]}
@@ -112,3 +127,26 @@ def test_end_to_end_small_run_and_report():
     assert by[("S01", "alert_correlator")]["claims_success"] is True and by[("S01", "alert_correlator")]["verification"] is None
     text = render(result)
     assert "Read this first" in text and "written by the same author" in text and "ANTHROPIC_API_KEY" in text
+
+
+def test_an_llm_quota_error_marks_the_baseline_not_run_instead_of_half_run(monkeypatch):
+    from benchmark import runner
+
+    def quota(events, post):
+        raise httpx.HTTPStatusError("quota", request=httpx.Request("POST", "https://x"), response=httpx.Response(429))
+    monkeypatch.setitem(runner.SYSTEMS, "llm_only", quota)
+    result = run_benchmark(seeds=1, systems=["alert_correlator", "llm_only"], scenarios=["S01"])
+    assert "429" in result["meta"]["not_run"]["llm_only"]
+    assert {r["system"] for r in result["runs"]} == {"alert_correlator"}
+
+
+def test_llm_answers_are_cached_so_a_rerun_does_not_call_again(monkeypatch, tmp_path):
+    from benchmark import systems
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setenv("LLM_CACHE", str(tmp_path / "cache.json"))
+    calls = []
+    monkeypatch.setattr(systems, "_call_llm", lambda *a: calls.append(1) or ('{"cause": "release_regression", "incident": true}', 9))
+    first = llm_only(make_events(BY_ID["S01"], 0), None)
+    second = llm_only(make_events(BY_ID["S01"], 0), None)
+    assert len(calls) == 1 and first.cause == second.cause == "release_regression" and second.llm_tokens == 9
