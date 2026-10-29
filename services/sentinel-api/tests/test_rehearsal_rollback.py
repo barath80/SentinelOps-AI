@@ -326,3 +326,49 @@ def test_rehearsal_window_starts_at_the_incident_not_the_detection_window(env):
     [inc] = run(client, base + events)
     r = propose(client, inc, action_template="recycle_db_pool").json()["contract"]["rehearsal"]
     assert r["outcome"] == "pass", r["reason"]
+
+
+def test_an_executor_that_raises_fails_the_step_instead_of_wedging_the_incident(tmp_path):
+    class Crashing(MockExecutor):
+        def run(self, *a):
+            raise RuntimeError("boom")
+
+    client = _client(tmp_path, Crashing())
+    inc = s01_incident(client)
+    c = propose(client, inc).json()
+    client.post(f"{RC}/{c['id']}/approve", json={"decision": "approve"}, headers=BOB)
+    done = client.post(f"{RC}/{c['id']}/execute", headers=BOB)
+    assert done.status_code == 200 and done.json()["state"] == "FAILED"
+    assert done.json()["action_run"]["output"]["error"] == "executor_exception: RuntimeError"
+    assert propose(client, inc).status_code == 201  # the incident is not blocked by a stuck contract
+
+
+def test_shop_executor_treats_a_non_json_reply_as_a_failure(monkeypatch):
+    import httpx
+
+    from app.recovery.executors import ShopAdminExecutor
+
+    class Html:
+        status_code = 200
+
+        def json(self):
+            raise ValueError("not json")
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: Html())
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: Html())
+    ex = ShopAdminExecutor("https://shop.example", "secret")
+    assert ex.capture("rollback_release", "demo", 5).ok is False
+    assert ex.run("rollback_release", "demo", 5).ok is False
+
+
+def test_a_rehearsal_that_fails_after_approval_blocks_execution(env, monkeypatch):
+    client, ex = env
+    c = propose(client, s01_incident(client)).json()
+    assert c["contract"]["rehearsal"]["outcome"] != "fail"
+    client.post(f"{RC}/{c['id']}/approve", json={"decision": "approve"}, headers=BOB)
+    from app.recovery import rehearsal
+    monkeypatch.setattr(rehearsal, "rehearse", lambda *a: {"outcome": "fail", "reason": "new telemetry: would not help",
+                                                           "model_version": "rehearsal-v1", "label": "x", "details": {}})
+    assert client.post(f"{RC}/{c['id']}/rehearse", headers=BOB).json()["contract"]["rehearsal"]["outcome"] == "fail"
+    res = client.post(f"{RC}/{c['id']}/execute", headers=BOB)
+    assert res.status_code == 409 and res.json()["error"] == "rehearsal_failed_since_approval" and ex.calls == []

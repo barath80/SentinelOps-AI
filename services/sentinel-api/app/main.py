@@ -16,7 +16,7 @@ from .adapters import ADAPTERS
 from .config import Settings, get_settings
 from . import auth as auth_mod, maintenance, prevention
 from .analysis import quality
-from .analysis.diagnostics import TESTS, investigate, run_test
+from .analysis.diagnostics import TESTS, investigate, investigated_answer, run_test
 from .analysis.service import analyze
 from .db import DiagnosticRunRow, EventRow, EvidenceRow, IncidentLabelRow, HypothesisRow, IncidentRow, make_session_factory
 from .recovery import api as recovery_api
@@ -182,11 +182,7 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
             for lab, inc in session.execute(q):
                 shadow = (inc.summary or {}).get("shadow_model") or {}
                 # The answer after the read-only investigation, if one ran (it can differ from rule_answer).
-                tested = session.scalar(select(DiagnosticRunRow.id).where(DiagnosticRunRow.incident_id == inc.id).limit(1))
-                top = session.scalars(select(HypothesisRow).where(HypothesisRow.incident_id == inc.id)
-                                      .order_by(HypothesisRow.score.desc())).first() if tested else None
-                investigated = (top.cause_key if top and inc.assessment == "leading_hypothesis" and top.status == "leading"
-                                else "unknown") if tested else None
+                investigated = investigated_answer(session, inc)
                 containment = ((inc.summary or {}).get("propagation") or {}).get("earliest_containment") or {}
                 out.append({"incident_id": inc.id, "label": lab.label, "labeled_by": lab.labeled_by, "labeled_at": lab.labeled_at.isoformat(),
                             "note": lab.note, "started_at": inc.started_at.isoformat(), "title": inc.title,

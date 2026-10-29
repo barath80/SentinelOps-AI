@@ -55,6 +55,12 @@ def aware(ts: str) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)  # SQLite returns naive UTC
 
 
+def suspended(intended_s: float, started: float) -> bool:
+    """True when a deliberate wait overran by a minute or more: the host was suspended, so the
+    traffic timing (baseline vs fault) is no longer what the run assumes."""
+    return time.monotonic() - started > intended_s + 60
+
+
 def log(msg: str) -> None:
     print(f"{datetime.now(timezone.utc):%H:%M:%S} {msg}", flush=True)
 
@@ -120,7 +126,11 @@ def run_once(key: str, shopper: Shopper, sentinel: Sentinel, investigate: bool, 
     base_codes = traffic(shopper, baseline_rounds, None)
     wait = DETECTION_WINDOW_S + 5
     log(f"[{run_id}] waiting {wait}s so the baseline is older than the detection window")
+    t_wait = time.monotonic()
     time.sleep(wait)
+    if suspended(wait, t_wait):
+        log(f"[{run_id}] {key}: INVALID, the host was suspended during the wait; nothing was labelled")
+        return {"run_id": run_id, "scenario": key, "truth": truth, "invalid": "host suspended during the run"}
     fault_start = datetime.now(timezone.utc)
     if key == "surge":
         codes = traffic(shopper, fault_rounds * 6, None, workers=6)

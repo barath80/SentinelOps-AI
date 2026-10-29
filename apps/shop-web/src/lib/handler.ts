@@ -1,6 +1,7 @@
 import { after } from "next/server";
 import { flushTelemetry, log, newRequestId } from "./log";
 import { activeScenario, burnCpu, CPU_BURN_MS, runWithScenario, scenarioFromHeaders } from "./faults";
+import { beginCpu, endCpu } from "./cpu";
 import { runTrace } from "./trace";
 
 type Ctx = { params: Promise<Record<string, string>> };
@@ -18,12 +19,13 @@ export function instrument(route: string, handler: Handler) {
     const attrs: Record<string, string | number> = { "http.route": route, "http.method": req.method };
     // A scoped chaos fault (see lib/faults.ts) applies to this request only and is never logged.
     const scenario = scenarioFromHeaders(req.headers);
-    // On-CPU time of this request (user + system), recorded on the root span. On a serverless
-    // instance that serves one request at a time this is the request's own CPU time.
-    const cpuStart = process.cpuUsage();
+    // On-CPU time of this request, recorded on the root span only when it is the request's own
+    // (no other request overlapped it on this process; see lib/cpu.ts).
+    const cpu = beginCpu();
     const recordCpu = () => {
-      const used = process.cpuUsage(cpuStart);
-      attrs["cpu_ms"] = Math.round((used.user + used.system) / 1000);
+      const ms = endCpu(cpu);
+      if (ms === undefined) attrs["cpu_ms_skipped"] = "concurrent";
+      else attrs["cpu_ms"] = ms;
     };
     return runWithScenario(scenario, () => runTrace(`${req.method} ${route}`, attrs, async () => {
       try {

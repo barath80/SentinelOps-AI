@@ -1,6 +1,6 @@
 # Benchmark results
 
-Generated 2026-10-28T08:11:33.520635+00:00 with Python 3.12.10. 20 seeds x 14 scenarios x 5 systems = 1400 runs. Rates are shown as `k/n = rate [Wilson 95% interval]`.
+Generated 2026-10-28T16:01:19.992483+00:00 with Python 3.12.10. 20 seeds x 14 scenarios x 5 systems = 1400 runs. Rates are shown as `k/n = rate [Wilson 95% interval]`.
 
 ## Read this first
 
@@ -33,7 +33,7 @@ Generated 2026-10-28T08:11:33.520635+00:00 with Python 3.12.10. 20 seeds x 14 sc
 | **telemetry_issue_flagged_rate**<br><sub>data problem reported (telemetry faults); higher is better</sub> | 0/20 = 0% [0%-16%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] |
 | **spurious_telemetry_warning_rate**<br><sub>data problem reported on sound telemetry; lower is better</sub> | 0/220 = 0% [0%-2%] | 0/220 = 0% [0%-2%] | 0/220 = 0% [0%-2%] | 0/220 = 0% [0%-2%] | 0/220 = 0% [0%-2%] |
 | mean diagnostic tests run | 0.0 | 0.0 | 1.3 | 0.0 | 1.3 |
-| mean analysis time (ms) | 10 | 1412 | 3997 | 1165 | 1237 |
+| mean analysis time (ms) | 21 | 2583 | 2821 | 2660 | 2838 |
 
 ## Falsification probes (P1, P2)
 
@@ -54,7 +54,7 @@ Generated 2026-10-28T08:11:33.520635+00:00 with Python 3.12.10. 20 seeds x 14 sc
 | **telemetry_issue_flagged_rate**<br><sub>data problem reported (telemetry faults); higher is better</sub> | n/a | n/a | n/a | n/a | n/a |
 | **spurious_telemetry_warning_rate**<br><sub>data problem reported on sound telemetry; lower is better</sub> | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] |
 | mean diagnostic tests run | 0.0 | 0.0 | 3.0 | 0.0 | 3.0 |
-| mean analysis time (ms) | 13 | 1403 | 1564 | 1362 | 1504 |
+| mean analysis time (ms) | 24 | 2650 | 3033 | 2781 | 3144 |
 
 ## Answers by scenario
 

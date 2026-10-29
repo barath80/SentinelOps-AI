@@ -67,14 +67,24 @@ class ShopAdminExecutor:
         self.base_url = base_url.rstrip("/")
         self.admin_token = admin_token
 
+    @staticmethod
+    def _body(res) -> dict:
+        """The reply as a dict; {} when it is not JSON (a proxy error page, for example)."""
+        try:
+            data = res.json()
+        except ValueError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
     def _set(self, scenario: str, timeout_seconds: int) -> ActionResult:
         try:
             res = httpx.post(f"{self.base_url}/api/admin/fault", json={"scenario": scenario},
                              headers={"x-admin-token": self.admin_token}, timeout=timeout_seconds)
         except httpx.HTTPError as exc:
             return ActionResult(False, {"error": type(exc).__name__})
-        ok = res.status_code == 200 and res.json().get("active") == scenario
-        return ActionResult(ok, {"status_code": res.status_code, "response": res.json() if ok else None})
+        body = self._body(res)
+        ok = res.status_code == 200 and body.get("active") == scenario
+        return ActionResult(ok, {"status_code": res.status_code, "response": body if ok else None})
 
     def capture(self, action_id: str, environment: str, timeout_seconds: int) -> ActionResult:
         if action_id not in _SHOP_ACTIONS:
@@ -84,7 +94,7 @@ class ShopAdminExecutor:
                             timeout=timeout_seconds)
         except httpx.HTTPError as exc:
             return ActionResult(False, {"error": type(exc).__name__})
-        active = res.json().get("active") if res.status_code == 200 else None
+        active = self._body(res).get("active") if res.status_code == 200 else None
         if not isinstance(active, str):
             return ActionResult(False, {"status_code": res.status_code, "error": "could not read the active scenario"})
         return ActionResult(True, {"scenario": active})

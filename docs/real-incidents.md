@@ -57,18 +57,59 @@ python -m campaign.run_campaign --shop <shop url> --sentinel <api url> --scenari
 python -m campaign.evaluate --sentinel <api url>
 ```
 
-## Next round: the new scenarios (pending deployment)
+## End-to-end run on the real application (local, 28 October 2026)
 
-The shop now produces S02 (connection-pool exhaustion), S04 (cache unavailable), S06 (CPU saturation), S07 (retry storm) and S11 (clock running ahead) as real behaviour, and SentinelOps has a cause, a diagnostic, a propagation node and a recovery action for each. They are tested in unit tests and the simulator but **have not yet been run against the live system**: that needs the new shop and API deployed first. Then:
+The new scenarios (S02, S04, S06, S07, S11) were run against the **production build of the real shop** and the real SentinelOps server on one machine, not against a simulator: the shop executed its real code paths (connection gate, cache client, CPU burn, retrying payment client, clock offset) and pushed its own logs and traces, with `cpu_ms` measured by `process.cpuUsage()`. Orders went to the in-memory store (`SHOP_DB=memory`), so no real database was touched, and every secret was generated for the run. Two pairs of shop and API ran side by side so the two tracks below could not interfere.
+
+**Track 1: labelled campaign** (`campaign/run_campaign.py`, faults scoped to the runner's requests, `--investigate`). 11 of 11 runs answered correctly:
+
+| Scenario | Truth | Rules at analysis | After investigation | Contain at | Shadow model |
+| --- | --- | --- | --- | --- | --- |
+| S01 | release_regression | release_regression | release_regression | service-code | release_regression |
+| S02 | db_pool_exhaustion | slow_dependency | **db_pool_exhaustion** | postgres-pool | slow_dependency |
+| S03 | slow_dependency | slow_dependency | slow_dependency | postgres | slow_dependency |
+| S04 | cache_unavailable | slow_dependency | **cache_unavailable** | cache | slow_dependency |
+| S05 | payment_provider_timeout | payment_provider_timeout | payment_provider_timeout | payment-provider | payment_provider_timeout |
+| S06 | resource_saturation | unknown (abstained) | **resource_saturation** | compute | slow_dependency |
+| S07 | retry_storm | retry_storm | retry_storm | payment-provider | slow_dependency |
+| S08 | unknown | unknown | unknown | service-code | unknown |
+| none | no fault | no incident | | | |
+| surge | 6x traffic, no symptom | no incident | | | |
+| S11 | no fault (clock 4 min ahead) | no incident, **telemetry quality: clock_skew** | | | |
+
+`campaign/evaluate.py` on the 8 labelled incidents: rules + investigation 8/8 correct with no wrong action; rules at analysis time 5/8 (2 would have recommended the wrong action); the shadow model 4/8 (it predates the four new causes and calls them all `slow_dependency`, as expected). The containment point was the true origin in 7/7 actionable incidents.
+
+**Track 2: recovery through the real executor** (`campaign/e2e_recovery.py`, `SENTINEL_EXECUTOR=shop_admin`). For each fault: analyse and investigate, propose as a responder, approve as a different operator with the approver role, execute (the executor switched the shop's fault off; read back as `none`), then verify from measured post-action traffic:
+
+| Scenario | Action | Rehearsal | Verification | Final state |
+| --- | --- | --- | --- | --- |
+| S01 | rollback_release | inconclusive (no request left on the old release) | pass | SUCCEEDED |
+| S02 | recycle_db_pool | pass | pass | SUCCEEDED |
+| S03 | apply_query_fix | pass | pass | SUCCEEDED |
+| S04 | restore_cache | pass | pass | SUCCEEDED |
+| S05 | restore_payment_simulator | pass | pass | SUCCEEDED |
+| S06 | scale_out | pass | pass | SUCCEEDED |
+| S07 | enable_retry_backoff | inconclusive (no effect model, by design) | pass | SUCCEEDED |
+| S02, rollback path | recycle_db_pool | pass | inconclusive (verification window starved of traffic on purpose) | **ROLLED_BACK**: the state read back equals the pre-action snapshot, the admin endpoint shows `S02_db_pool_exhaustion` active again, and a live shopping round took 3.7 s again |
+
+**Learned model v2 on the same incidents.** v1 (log features only) was serving during the run and got 4/8: it called every new cause `slow_dependency`. Model v2 was then trained with trace features and the new causes (see `services/sentinel-api/models/MODEL_CARD.md`) and scored on these incidents, rebuilt from their stored events (`python -m campaign.evaluate --recompute-from <database>`), which it never saw in training: **8/8 correct** for both the served logistic regression and the full calibrated random forest, with no wrong action. Eight incidents give a very wide interval; this shows the trace features carry the signal on real telemetry, not that the model is reliable.
+
+**What the real application exposed** (and what was fixed):
+
+- *Rehearsal false "telemetry gap".* The first run made the S02 rehearsal inconclusive: gaps were measured from the start of the 120 s detection window, and on real traffic the fault began ~70 s into it. The simulator never showed this because its faults fill the window. The replay now starts at the incident's onset; a regression test reproduces the live timing, and the rerun above shows `pass`.
+- *Dashboard did not refresh after an action.* Found by the new browser test: the detail pane skipped re-rendering whenever focus was inside it, and the clicked button kept focus, so a proposal or approval only appeared after clicking elsewhere. It now skips only while a text field has focus.
+- *Diagnostics rebuilt incidents from a different window than the analysis.* Rebuilding the labelled incidents found two that no longer reproduced: diagnostics used a fixed 900 s lookback, which reached the previous run's fault traffic and counted it as baseline. Incidents now store their analysis window and diagnostics (and rehearsal) rebuild from exactly that window; a regression test reproduces it.
+- *A suspended host invalidates a run.* One attempt was distorted by a six-hour suspension mid-run (its S03 answer was meaningless). Both runners now mark a run `invalid` when a deliberate wait overruns by a minute or more, instead of scoring it.
+
+## Still to do on the deployed system
+
+The same two tracks have not been run against the deployed shop (Vercel) and API (Render): that needs the new code deployed and the deployment's own secrets, which this run did not use. Commands:
 
 ```
 cd services/sentinel-api
-set CHAOS_TOKEN=...                 (the shop's CHAOS_TOKEN)
-set SENTINEL_TOKEN=...              (machine token)
-set SENTINEL_OPERATOR=campaign      (a responder operator; labels are recorded under it)
-set SENTINEL_OPERATOR_PASSWORD=...
+set CHAOS_TOKEN=...  SENTINEL_TOKEN=<machine token>  SENTINEL_OPERATOR=campaign  SENTINEL_OPERATOR_PASSWORD=...
 python -m campaign.run_campaign --shop <shop url> --sentinel <api url> --scenarios S01 S02 S03 S04 S05 S06 S07 S08 none surge S11 --runs 2 --investigate --out campaign/results/live-3.jsonl
 python -m campaign.evaluate --sentinel <api url>
 ```
 
-The evaluation now also scores the answer after investigation (the new causes only surface there) and the earliest containment point against the true origin. The learned shadow model predates the new causes and will miss them; that is expected and will be reported.
+`campaign/e2e_recovery.py` switches the fault globally on the shop instance it targets, so run it only against a shop nobody else is using (not the public demo).

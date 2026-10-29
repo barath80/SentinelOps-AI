@@ -271,8 +271,11 @@ function renderDetail() {
   const el = $("#detail");
   const inc = state.incidents.find((i) => i.id === state.selected);
   if (!inc) { el.replaceChildren(h("p", { class: "muted" }, "Select an incident.")); return; }
-  const focus = document.activeElement && el.contains(document.activeElement);
-  if (focus) return; // do not clobber a field the user is typing in
+  // Do not clobber a form control in use (a text field, a select, a ticked acknowledgement box). A
+  // focused button (the one just clicked) must not block the re-render, or its result never appears.
+  const active = document.activeElement;
+  const editing = active && el.contains(active) && /^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName);
+  if (editing) return;
   const anomalies = (inc.summary.anomalies || []).map((a) => h("li", {},
     `${a.route}: ${a.kind}. Errors ${(a.recent_error_rate * 100).toFixed(0)}% (baseline ${(a.baseline_error_rate * 100).toFixed(0)}%), p95 ${Math.round(a.recent_p95_ms)} ms`
     + (a.baseline_p95_ms != null ? ` (baseline ${Math.round(a.baseline_p95_ms)} ms)` : "") + `, ${a.recent_requests} recent requests.`));

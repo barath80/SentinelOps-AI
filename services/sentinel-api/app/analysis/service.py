@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..db import DiagnosticRunRow, EvidenceRow, EventRow, HypothesisRow, IncidentRow
 from . import learned, propagation, quality
 from .attribution import attribute
-from .ml_features import features_for_candidate
+from .ml_features import features_for_candidate, spans_by_trace
 from .diagnostics import reapply, retry_events
 from .detect import DetectionConfig, IncidentCandidate, detect, group, samples_from_rows
 from .hypotheses import SCORE_VERSION, build_hypotheses, compute_features, rank
@@ -52,10 +52,7 @@ def analyze(session: Session, tenant_id: str, as_of: datetime, window_seconds: i
     ahead = list(session.scalars(select(EventRow).where(
         EventRow.tenant_id == tenant_id, EventRow.event_time > as_of, EventRow.event_time <= as_of + timedelta(seconds=QUALITY_LOOKAHEAD_S))))
     data_quality = quality.assess(rows + ahead)
-    spans: dict[str, list] = {}
-    for r in rows:
-        if r.event_type == "trace" and r.trace_id:
-            spans.setdefault(r.trace_id, []).append(r)
+    spans = spans_by_trace(rows)
     valid_event_ids = {r.event_id for r in rows}
 
     ids: list[str] = []
@@ -64,7 +61,7 @@ def analyze(session: Session, tenant_id: str, as_of: datetime, window_seconds: i
         feats = compute_features(cand, samples, timeouts, retries)
         ranked, assessment = rank(build_hypotheses(cand, feats))
         rule_answer = ranked[0].cause_key if assessment == "leading_hypothesis" else "unknown"
-        model_features = features_for_candidate(cand, samples, feats, timeouts_with_ids)
+        model_features = features_for_candidate(cand, samples, feats, timeouts_with_ids, spans)
         shadow_result = None
         model = learned.load() if shadow else None
         if model is not None:
@@ -103,6 +100,9 @@ def analyze(session: Session, tenant_id: str, as_of: datetime, window_seconds: i
             "rule_answer": rule_answer,
             "shadow_model": shadow_result,
             "telemetry_quality": data_quality,
+            # Diagnostics rebuild the incident from exactly this window: a wider one can pull an
+            # earlier, unrelated fault into the baseline and make the incident vanish.
+            "analysis_window_seconds": window_seconds,
             "propagation": propagation.build(cand, samples, spans),
         }
         session.flush()

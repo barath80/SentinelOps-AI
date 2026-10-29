@@ -30,12 +30,13 @@ SentinelOps AI is an AI-assisted reliability operations platform for cloud appli
 | Learned root-cause model: notebook, model card, shadow mode in the API, incident labels | [notebook](services/sentinel-api/notebooks/root_cause_model.ipynb), [model card](services/sentinel-api/models/MODEL_CARD.md) |
 | Dashboard with sign-in | `app/ui/` |
 | Benchmark against baselines (simulated) | [docs/benchmark-results.md](docs/benchmark-results.md) |
-| Labelled-incident campaign and evaluation on the live system | [docs/real-incidents.md](docs/real-incidents.md) |
+| Labelled-incident campaign and evaluation on the live system; end-to-end run of every new scenario, recovery and rollback on the real application | [docs/real-incidents.md](docs/real-incidents.md) |
+| Browser tests: shop checkout journey, dashboard sign-in, roles, four-eyes approval and execution | `apps/shop-web/e2e/`, `apps/shop-web/e2e-dashboard/` |
 | CI (tests, lint, typecheck, benchmark smoke run, image build), local stack | [.github/workflows/ci.yml](.github/workflows/ci.yml), [docker-compose.yml](docker-compose.yml) |
 
-**Headline results, with their limits.** On the simulated benchmark (12 scenarios plus 2 probes, 20 seeds each), full SentinelOps names the right cause in 179/180 determinable runs (99%) against 33% for a naive log-based alert correlator, proposes a wrong recovery action in 0/200 fault runs against 42%, names the true origin as the earliest containment point in 157/160 runs, and flags the clock-skew scenario every time with no false warnings in 260 other runs. Rehearsal alone halves wrong actions (20% to 10%) and removes them on the probes. The scenarios were written by the same author as the system, and SentinelOps reads traces that the baselines do not, so these numbers show the mechanisms work, not that they generalize. On 12 real labelled incidents from the live system the rule engine was right 11 times and the learned shadow model 12 times, with no wrong recovery action from either; 12 incidents give wide intervals (see the report).
+**Headline results, with their limits.** On the simulated benchmark (12 scenarios plus 2 probes, 20 seeds each), full SentinelOps names the right cause in 179/180 determinable runs (99%) against 33% for a naive log-based alert correlator, proposes a wrong recovery action in 0/200 fault runs against 42%, names the true origin as the earliest containment point in 157/160 runs, and flags the clock-skew scenario every time with no false warnings in 260 other runs. Rehearsal alone halves wrong actions (20% to 10%) and removes them on the probes. The scenarios were written by the same author as the system, and SentinelOps reads traces that the baselines do not, so these numbers show the mechanisms work, not that they generalize. On the real application run locally, every scenario was diagnosed correctly after investigation (8/8 labelled incidents, containment point right 7/7), all seven recoveries succeeded through the real executor and a rollback was verified to restore the fault. On 12 real labelled incidents from the deployed system the rule engine was right 11 times and the learned shadow model 12 times, with no wrong recovery action from either; 12 incidents give wide intervals (see the report).
 
-**Not built or not yet run:** the LLM-only baseline run (needs an `ANTHROPIC_API_KEY`); the live campaign for S02, S04, S06, S07 and S11 (the code is ready; it runs after the new shop and API are deployed); single sign-on and multiple tenants; a sandbox *copy* of production (rehearsal replays recorded telemetry instead); a production executor (out of scope by design); retraining the learned model on the four new causes. The learned model runs in shadow mode only and never drives a decision.
+**Not built or not yet run:** the LLM-only baseline run (needs an `ANTHROPIC_API_KEY`); the campaign for S02, S04, S06, S07 and S11 against the *deployed* shop and API (it has been run end to end against the real application locally; the deployed run needs the new code deployed); single sign-on and multiple tenants; a sandbox *copy* of production (rehearsal replays recorded telemetry instead); a production executor (out of scope by design). The learned model runs in shadow mode only and never drives a decision.
 
 ## Run it
 
@@ -43,6 +44,8 @@ SentinelOps AI is an AI-assisted reliability operations platform for cloud appli
 # Tests
 cd services/sentinel-api && pip install -r requirements.txt && python -m pytest -q
 cd apps/shop-web && npm ci && npx tsc --noEmit && npm run lint && npm test
+cd apps/shop-web && npx playwright install chromium && npx playwright test        # shop journeys
+cd apps/shop-web && npx playwright test -c playwright.dashboard.config.ts            # dashboard (starts the API)
 
 # SentinelOps API + dashboard with its own Postgres (http://localhost:8000/ui/, admin / change-me-local-only)
 docker compose up --build
@@ -270,9 +273,9 @@ runbooks/  migrations/  tests/{unit,integration,e2e,security,load}  docs/  .gith
 
 ## Acceptance checklist
 
-- [x] Tester can complete the simulated shopping journey (live store; checkout route tests and a Playwright browse-to-cart test)
+- [x] Tester can complete the simulated shopping journey (live store; Playwright checkout journey on the in-memory store)
 - [x] Key requests are traceable (one trace per request with pool, query, payment and cache spans; the shop is a single service)
-- [ ] Each fault scenario reliably produces its expected symptoms: verified live for S01, S03, S05, S08; S02, S04, S06, S07, S11 verified in unit tests and the simulator, live campaign pending deployment
+- [x] Each fault scenario reliably produces its expected symptoms: S01, S03, S05, S08 on the deployed system; S01-S08 and S11 end to end on the real application locally (deployed run of the new ones pending)
 - [x] Hypotheses and evidence IDs resolve to real data; counterevidence and missing data are shown
 - [x] LLM failure does not erase incident or telemetry records (no LLM is in the decision path)
 - [x] Unknown evidence IDs and non-allow-listed actions are rejected

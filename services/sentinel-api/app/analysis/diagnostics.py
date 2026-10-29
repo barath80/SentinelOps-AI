@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from ..db import DiagnosticRunRow, EventRow, EvidenceRow, HypothesisRow, IncidentRow
 from .detect import DetectionConfig, IncidentCandidate, Sample, detect, group, samples_from_rows
 from .hypotheses import SCORE_VERSION, EvidenceItem, Features, Hypothesis, compute_features, rank
+from .ml_features import spans_by_trace
 
 LOOKBACK_SECONDS = 900
 
@@ -307,12 +308,15 @@ def retry_events(rows) -> list[tuple[str, datetime, str | None]]:
     return [(r.event_id, _aware(r.event_time), r.request_id) for r in rows if (r.attributes or {}).get("message") == "payment_retry"]
 
 
-def load_context(session: Session, incident: IncidentRow, cfg: DetectionConfig = DetectionConfig()) -> Context | None:
-    """Rebuild the incident's analysis context from stored events as of its detection time."""
+def load_context(session: Session, incident: IncidentRow, cfg: DetectionConfig = DetectionConfig(),
+                 lookback_seconds: float | None = None) -> Context | None:
+    """Rebuild the incident's analysis context from stored events as of its detection time, over the
+    window it was analysed with (or `lookback_seconds` when given)."""
     as_of = _aware(incident.detected_at)
+    lookback = lookback_seconds or (incident.summary or {}).get("analysis_window_seconds") or LOOKBACK_SECONDS
     rows = list(session.scalars(select(EventRow).where(
         EventRow.tenant_id == incident.tenant_id,
-        EventRow.event_time >= as_of - timedelta(seconds=LOOKBACK_SECONDS), EventRow.event_time <= as_of)))
+        EventRow.event_time >= as_of - timedelta(seconds=lookback), EventRow.event_time <= as_of)))
     samples = samples_from_rows(rows)
     mine = set(incident.routes)
     cand = next((c for c in group(detect(samples, as_of, cfg), as_of, cfg) if mine & set(c.routes)), None)
@@ -321,11 +325,17 @@ def load_context(session: Session, incident: IncidentRow, cfg: DetectionConfig =
     timeouts = [(r.event_id, _aware(r.event_time), r.request_id) for r in rows
                 if (r.attributes or {}).get("message") == "payment_timeout"]
     feats = compute_features(cand, samples, [(i, t) for i, t, _ in timeouts], retry_events(rows))
-    spans: dict[str, list[EventRow]] = {}
-    for r in rows:
-        if r.event_type == "trace" and r.trace_id:
-            spans.setdefault(r.trace_id, []).append(r)
-    return Context(cand, feats, samples, timeouts, [r for r in rows if r.event_type == "metric"], spans)
+    return Context(cand, feats, samples, timeouts, [r for r in rows if r.event_type == "metric"], spans_by_trace(rows))
+
+
+def investigated_answer(session: Session, incident: IncidentRow) -> str | None:
+    """The cause the incident stands at after its read-only investigation: the leading hypothesis,
+    or "unknown" when it abstains. None when no diagnostic test has run."""
+    if session.scalar(select(DiagnosticRunRow.id).where(DiagnosticRunRow.incident_id == incident.id).limit(1)) is None:
+        return None
+    top = session.scalars(select(HypothesisRow).where(HypothesisRow.incident_id == incident.id)
+                          .order_by(HypothesisRow.score.desc())).first()
+    return top.cause_key if top and incident.assessment == "leading_hypothesis" and top.status == "leading" else "unknown"
 
 
 # ---- persistence + rescoring ---------------------------------------------------------------

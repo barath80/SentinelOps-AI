@@ -22,7 +22,7 @@ from ..analysis.detect import samples_from_rows
 from ..db import (ActionRunRow, ApprovalRow, ContractRow, EventRow, HypothesisRow, IncidentRow, RehearsalRow,
                   RollbackRunRow, TransitionRow, VerificationRow)
 from . import rehearsal, slo
-from .executors import Executor
+from .executors import ActionResult, Executor
 from .policy import CATALOGUE, POLICY_VERSION, RECOMMENDED_ACTION, evaluate
 
 ALLOWED: dict[str, set[str]] = {
@@ -45,6 +45,15 @@ class ContractError(Exception):
     def __init__(self, code: str, status: int, detail: dict | None = None):
         super().__init__(code)
         self.code, self.status, self.detail = code, status, detail or {}
+
+
+def _call(step, *args) -> ActionResult:
+    """Run one executor step. An executor that raises must not leave the contract stuck in a state
+    that blocks every later contract for the incident: the exception becomes a failed result."""
+    try:
+        return step(*args)
+    except Exception as exc:  # noqa: BLE001 - any executor bug or transport error is a failed step
+        return ActionResult(False, {"error": f"executor_exception: {type(exc).__name__}"})
 
 
 def _now() -> datetime:
@@ -225,9 +234,17 @@ def execute(sessions: sessionmaker, tenant_id: str, contract_id: str, actor: str
         inc = s.get(IncidentRow, row.incident_id)
         if inc is None or inc.status != "open":
             raise ContractError("precondition_failed", 409, {"check": "incident_open"})
-        approved_at = s.scalar(select(TransitionRow.at).where(TransitionRow.contract_id == row.id,
-                                                              TransitionRow.to_state == "READY_FOR_ACTION")
-                               .order_by(TransitionRow.at.desc()))
+        approval = s.scalars(select(TransitionRow).where(TransitionRow.contract_id == row.id,
+                                                         TransitionRow.to_state == "READY_FOR_ACTION")
+                             .order_by(TransitionRow.at.desc())).first()
+        approved_at = approval.at if approval else None
+        # A rehearsal re-run after approval may now predict failure: that needs the same explicit
+        # acknowledgement as approving a failed rehearsal, so the approval no longer covers it.
+        if ((row.contract.get("rehearsal") or {}).get("outcome") == "fail"
+                and not (approval and (approval.details or {}).get("acknowledged_rehearsal_failure"))):
+            raise ContractError("rehearsal_failed_since_approval", 409, {
+                "reason": row.contract["rehearsal"]["reason"],
+                "hint": "propose a new contract and approve it with acknowledge_rehearsal_failure"})
         if approved_at is not None and (_now() - _aware(approved_at)).total_seconds() > approval_ttl_seconds:
             raise ContractError("approval_expired", 409, {"ttl_seconds": approval_ttl_seconds,
                                                           "hint": "propose a new contract; conditions may have changed"})
@@ -246,8 +263,8 @@ def execute(sessions: sessionmaker, tenant_id: str, contract_id: str, actor: str
 
     # Capture the state the action will change first: without it there is no rollback path, so the
     # action is not attempted at all.
-    snapshot = executor.capture(action, env, timeout)
-    result = executor.run(action, env, timeout) if snapshot.ok else None
+    snapshot = _call(executor.capture, action, env, timeout)
+    result = _call(executor.run, action, env, timeout) if snapshot.ok else None
 
     with sessions.begin() as s:
         row = _get(s, tenant_id, contract_id)
@@ -344,10 +361,10 @@ def rollback(sessions: sessionmaker, tenant_id: str, contract_id: str, actor: st
             raise ContractError("already_rolled_back", 409) from exc
         action, env, timeout, rb_id = row.action_template, row.environment, row.contract["timeout_seconds"], rb.id
 
-    result = executor.revert(action, env, snap, timeout)
+    result = _call(executor.revert, action, env, snap, timeout)
     # A revert that reports success is not trusted on its word: read the state back and compare it
     # with what was captured before the action.
-    after = executor.capture(action, env, timeout) if result.ok else None
+    after = _call(executor.capture, action, env, timeout) if result.ok else None
     restored = bool(after and after.ok and after.output == snap)
     check = {"checked": after is not None, "restored": restored, "expected": snap,
              "observed": after.output if after else None}

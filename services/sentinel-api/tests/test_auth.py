@@ -195,3 +195,18 @@ def test_shared_token_mode_needs_the_development_flag(tmp_path):
 def test_unknown_auth_mode_is_rejected():
     with pytest.raises(ValueError):
         Settings(auth_mode="open")
+
+
+def test_a_lockout_from_one_address_does_not_lock_the_operator_out_elsewhere(tmp_path):
+    app = create_app(Settings(database_url=f"sqlite:///{tmp_path / 'l.db'}", ingest_token="machine-token",
+                              session_secret="s" * 40, bootstrap_admin="root:root-password-123"))
+    attacker, owner = TestClient(app, client=("203.0.113.9", 4000)), TestClient(app, client=("198.51.100.7", 4000))
+    for _ in range(5):
+        assert attacker.post("/api/v1/auth/login", json={"username": "root", "password": "wrong"}).status_code == 401
+    assert attacker.post("/api/v1/auth/login", json={"username": "root", "password": "root-password-123"}).status_code == 429
+    assert owner.post("/api/v1/auth/login", json={"username": "root", "password": "root-password-123"}).status_code == 200
+
+
+def test_a_non_ascii_token_is_a_401_not_a_server_error(api):
+    res = api.get("/api/v1/incidents", headers={"Authorization": "Bearer tokén".encode("latin-1")})
+    assert res.status_code == 401

@@ -27,7 +27,7 @@ from pathlib import Path
 
 import httpx
 
-from .run_campaign import DETECTION_WINDOW_S, SCENARIOS, Shopper, aware, log, traffic
+from .run_campaign import DETECTION_WINDOW_S, SCENARIOS, Shopper, aware, log, suspended, traffic
 
 
 class Api:
@@ -64,7 +64,10 @@ def run_one(key: str, args, api: Api, responder: str, approver: str, admin_token
     start = datetime.now(timezone.utc)
     log(f"{key}: baseline")
     traffic(shopper, args.baseline_rounds, None)
+    t_wait = time.monotonic()
     time.sleep(DETECTION_WINDOW_S + 5)
+    if suspended(DETECTION_WINDOW_S + 5, t_wait):
+        return {**out, "result": "invalid: host suspended during the run"}
     fault_start = datetime.now(timezone.utc)
     out["fault_active"] = set_fault(args.shop, admin_token, scenario)
     traffic(shopper, args.fault_rounds, None)

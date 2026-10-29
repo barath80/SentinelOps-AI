@@ -1,0 +1,151 @@
+{
+  "version": "root-cause-v2",
+  "algorithm": "random_forest",
+  "best_params": {
+    "max_depth": null,
+    "min_samples_leaf": 1
+  },
+  "calibration": "sigmoid, 5-fold",
+  "calibration_comparison": [
+    {
+      "probabilities": "uncalibrated",
+      "log_loss": 0.1327,
+      "brier": 0.0658,
+      "macro_f1": 0.9338
+    },
+    {
+      "probabilities": "isotonic",
+      "log_loss": 0.1569,
+      "brier": 0.0625,
+      "macro_f1": 0.9369
+    },
+    {
+      "probabilities": "sigmoid",
+      "log_loss": 0.1512,
+      "brier": 0.067,
+      "macro_f1": 0.9334
+    }
+  ],
+  "tau": 0.87,
+  "target_precision": 0.99,
+  "features": [
+    "err_recent",
+    "err_baseline",
+    "err_delta",
+    "log_p95_ratio",
+    "latency_only",
+    "version_changed",
+    "exception_ratio",
+    "fast_fail_ratio",
+    "timeout_match_share",
+    "timeouts_per_bad",
+    "share_504",
+    "log_volume_ratio",
+    "n_routes_affected",
+    "frac_routes_affected",
+    "n_unaffected",
+    "log_bad_median_ms",
+    "other_routes_log_p95_ratio",
+    "trace_coverage",
+    "pool_wait_share",
+    "query_share",
+    "cache_fail_share",
+    "cpu_share",
+    "payment_calls_per_request",
+    "payment_hang_share",
+    "retry_log_share"
+  ],
+  "classes": [
+    "cache_unavailable",
+    "db_pool_exhaustion",
+    "no_fault",
+    "payment_provider_timeout",
+    "release_regression",
+    "resource_saturation",
+    "retry_storm",
+    "slow_dependency",
+    "traffic_surge",
+    "unknown"
+  ],
+  "cv": [
+    {
+      "model": "random_forest",
+      "cv_macro_f1": 0.9389094027347756,
+      "cv_std": 0.008878093142774842,
+      "fit_seconds": 7.3
+    },
+    {
+      "model": "gradient_boosting",
+      "cv_macro_f1": 0.9384705229035412,
+      "cv_std": 0.005405478821280665,
+      "fit_seconds": 39.1
+    },
+    {
+      "model": "logistic_regression",
+      "cv_macro_f1": 0.8954480194889713,
+      "cv_std": 0.008452914548607927,
+      "fit_seconds": 17.0
+    }
+  ],
+  "test_results": {
+    "A: in-distribution | learned model": {
+      "n": 3405,
+      "exact_accuracy": 0.914,
+      "macro_f1": 0.91,
+      "decision_accuracy": 0.921,
+      "incorrect_intervention_rate": 0.006,
+      "missed_actionable_rate": 0.072,
+      "coverage_named": 0.788
+    },
+    "A: in-distribution | rule engine": {
+      "n": 3405,
+      "exact_accuracy": 0.47,
+      "macro_f1": 0.391,
+      "decision_accuracy": 0.48,
+      "incorrect_intervention_rate": 0.213,
+      "missed_actionable_rate": 0.275,
+      "coverage_named": 0.597
+    },
+    "B: shifted | learned model": {
+      "n": 3074,
+      "exact_accuracy": 0.712,
+      "macro_f1": 0.709,
+      "decision_accuracy": 0.746,
+      "incorrect_intervention_rate": 0.011,
+      "missed_actionable_rate": 0.238,
+      "coverage_named": 0.587
+    },
+    "B: shifted | rule engine": {
+      "n": 3074,
+      "exact_accuracy": 0.356,
+      "macro_f1": 0.291,
+      "decision_accuracy": 0.384,
+      "incorrect_intervention_rate": 0.264,
+      "missed_actionable_rate": 0.287,
+      "coverage_named": 0.548
+    }
+  },
+  "data": {
+    "generator": "training/generator.py",
+    "train_seeds": [
+      0,
+      1500
+    ],
+    "testA_seeds": [
+      100000,
+      100400
+    ],
+    "testB_seeds": [
+      200000,
+      200400
+    ],
+    "train_rows": 12711,
+    "testA_rows": 3405,
+    "testB_rows": 3074
+  },
+  "environment": {
+    "python": "3.12.10",
+    "sklearn": "1.9.0",
+    "numpy": "2.2.6"
+  }
+}

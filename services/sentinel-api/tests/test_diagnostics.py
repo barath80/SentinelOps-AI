@@ -212,3 +212,20 @@ def test_decoy_release_during_a_slow_query_is_resolved_by_testing_the_alternativ
     assert out["incident"]["hypotheses"][0]["cause_key"] == "slow_dependency"
     release_run = next(r for r in out["incident"]["diagnostic_runs"] if r["test_id"] == "compare_error_rate_before_after_release")
     assert release_run["details"]["strength"] <= 0.4  # coincidence alone is weak for a slowdown
+
+
+def test_diagnostics_rebuild_the_incident_with_its_own_analysis_window(client):
+    """An earlier, unrelated slowdown sits inside the 900 s default lookback but outside this incident's
+    300 s analysis window. Rebuilding with 900 s put it in the baseline and the incident vanished."""
+    earlier = [line(NOW - timedelta(seconds=560 - i * 6), "/api/checkout", 201, 2600) | {"request_id": f"old{i}"} for i in range(25)]
+    base = [line(NOW - timedelta(seconds=290 - i * 4), "/api/checkout", 201, 18 + i % 4) | {"request_id": f"b{i}"} for i in range(40)]
+    slow = recent(201, 1520)
+    events, spans = traced(slow, "db.query orders.lookup", 0.95)
+    ingest_spans(client, spans)
+    res = client.post("/api/v1/telemetry/events?adapter=shop_json", json={"events": earlier + base + events}, headers=AUTH)
+    assert res.json()["rejected"] == 0
+    [inc] = client.post("/api/v1/incidents/analyze", params={"as_of": NOW.isoformat(), "window_seconds": 300}, headers=AUTH).json()
+    assert inc["summary"]["analysis_window_seconds"] == 300
+    out = investigate(client, inc["id"])
+    run_ = next(r for r in out["incident"]["diagnostic_runs"] if r["test_id"] == "inspect_db_pool_wait_and_query_duration")
+    assert run_["outcome"] == "supports", run_["explanation"]

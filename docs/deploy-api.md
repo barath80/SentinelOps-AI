@@ -35,7 +35,7 @@ Status: **deployed** on Render (https://sentinelops-ai-lukk.onrender.com) with N
 - **Schema changes are not migrated.** `create_all` only creates missing tables. Changing a column needs a real migration
   (Alembic); until then drop and recreate the SentinelOps tables.
 - **Sessions are stateless signed tokens** (8 hours by default). Sign-out, a password change or disabling an operator revokes
-  every session of that operator at once. Five failed sign-ins lock a username for 15 minutes, counted per instance.
+  every session of that operator at once. Five failed sign-ins lock a username from that client address for 15 minutes, counted per instance.
 - **One tenant.** All operators see all incidents. There is no single sign-on (OIDC) yet: accounts are local to SentinelOps.
 - **Upgrading from the shared-token version:** the default `SENTINEL_AUTH_MODE=operators` turns the old "token + your name" login
   off. Set `SENTINEL_BOOTSTRAP_ADMIN` before deploying, The old shared-token behaviour cannot be used on Render: it starts only

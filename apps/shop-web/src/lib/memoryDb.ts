@@ -3,12 +3,18 @@
 // SHOP_DB=memory so test traffic never writes to a real database (see db.ts).
 export type FakeRow = Record<string, unknown>;
 
-export const ordersTable: FakeRow[] = [];
-export const usersTable: FakeRow[] = [];
-export const rateLimitsTable: FakeRow[] = [];
-export const passwordResetTokensTable: FakeRow[] = [];
-export const wishlistItemsTable: FakeRow[] = [];
-export const addressesTable: FakeRow[] = [];
+// Next.js can load this module more than once in one server process (route handlers and pages are
+// separate bundles), so the tables live on globalThis: every copy of the module sees one store.
+type Tables = Record<"orders" | "users" | "rateLimits" | "resetTokens" | "wishlist" | "addresses", FakeRow[]>;
+const g = globalThis as typeof globalThis & { __shopMemoryDb?: Tables };
+const tables = (g.__shopMemoryDb ??= { orders: [], users: [], rateLimits: [], resetTokens: [], wishlist: [], addresses: [] });
+
+export const ordersTable: FakeRow[] = tables.orders;
+export const usersTable: FakeRow[] = tables.users;
+export const rateLimitsTable: FakeRow[] = tables.rateLimits;
+export const passwordResetTokensTable: FakeRow[] = tables.resetTokens;
+export const wishlistItemsTable: FakeRow[] = tables.wishlist;
+export const addressesTable: FakeRow[] = tables.addresses;
 
 export async function memorySql(strings: readonly string[], ...values: unknown[]): Promise<FakeRow[]> {
   const text = strings.join("?");

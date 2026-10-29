@@ -111,7 +111,9 @@ def _aware(dt: datetime | None) -> datetime | None:
 
 
 class _Lockout:
-    """Failed logins per username, in memory (per instance): 5 failures lock it for 15 minutes."""
+    """Failed logins per (username, client address), in memory (per instance): 5 failures lock that
+    pair for 15 minutes. Behind a proxy the address is only real when uvicorn runs with
+    --proxy-headers (the Dockerfile does)."""
 
     def __init__(self) -> None:
         self._failures: dict[str, list[float]] = {}
@@ -205,7 +207,8 @@ class Auth:
 
     def _machine(self, supplied: str) -> bool:
         expected = self.settings.ingest_token
-        return bool(expected) and hmac.compare_digest(supplied, expected)
+        # Compare bytes: str comparison raises on non-ASCII input, which would turn a bad token into a 500.
+        return bool(expected) and hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
 
     def principal(self, authorization: str | None, x_actor: str | None) -> Principal:
         supplied = (authorization or "").removeprefix("Bearer ").strip()
@@ -267,15 +270,18 @@ class Auth:
             if not settings.session_secret:
                 raise HTTPException(status_code=503, detail="session_secret_not_configured")
             username = body.username.strip().lower()
-            if self.lockout.locked(username):
+            # Keyed on the username AND the client address: guessing from one address is throttled,
+            # but a stranger elsewhere cannot lock a real operator out by failing on purpose.
+            key = f"{username}|{request.client.host if request.client else '-'}"
+            if self.lockout.locked(key):
                 raise HTTPException(status_code=429, detail="too_many_failed_logins")
             with sessions.begin() as s:
                 op = s.get(OperatorRow, username)
                 ok = check_password(body.password, op.password_hash if op else _DUMMY_HASH) and op is not None and not op.disabled
                 if not ok:
-                    self.lockout.fail(username)
+                    self.lockout.fail(key)
                     raise HTTPException(status_code=401, detail="invalid_credentials")
-                self.lockout.clear(username)
+                self.lockout.clear(key)
                 op.last_login_at = datetime.now(timezone.utc)
                 role = op.role
             now = time.time()

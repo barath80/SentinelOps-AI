@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 // These specs cover flows that don't touch Postgres (catalogue is in-memory, cart is a cookie).
-// Checkout/auth/order-history flows need DATABASE_URL and are deferred until a test DB is wired up.
+// Checkout runs against the in-memory store: see checkout.spec.ts.
 
 test("home page loads and links to a product", async ({ page }) => {
   await page.goto("/");

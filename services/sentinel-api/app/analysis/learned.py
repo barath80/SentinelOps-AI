@@ -11,7 +11,7 @@ import math
 from functools import lru_cache
 from pathlib import Path
 
-DEFAULT_PATH = Path(__file__).resolve().parent.parent / "models" / "root_cause_serving_v1.json"
+DEFAULT_PATH = Path(__file__).resolve().parent.parent / "models" / "root_cause_serving_v2.json"
 
 
 class ServingModel:

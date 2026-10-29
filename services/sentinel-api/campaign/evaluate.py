@@ -10,6 +10,12 @@ Usage:
   set SENTINEL_TOKEN=...
   python -m campaign.evaluate --sentinel https://sentinel.example --out campaign/results
   python -m campaign.evaluate --file campaign/results/real_labelled.json
+  python -m campaign.evaluate --recompute-from sqlite:///path/to/sentinel.db
+
+--recompute-from reads a SentinelOps database directly and rebuilds each labelled incident's features
+from its stored events with the CURRENT feature code, then scores the current models. Use it to test
+a newly trained model on real incidents recorded before it existed (their stored features and
+shadow predictions are those of the model that was serving at the time).
 """
 from __future__ import annotations
 
@@ -45,6 +51,47 @@ def fetch(base: str, token: str) -> list[dict]:
     raise RuntimeError(f"could not fetch labelled incidents: {last}")
 
 
+def recompute(db_url: str) -> tuple[list[dict], list[str]]:
+    """Labelled incidents from a SentinelOps database, rebuilt from stored events with the current code.
+    Returns (rows, ids of incidents that could not be rebuilt)."""
+    from datetime import timezone
+
+    from sqlalchemy import select
+
+    from app.analysis import learned
+    from app.analysis.diagnostics import investigated_answer, load_context
+    from app.analysis.ml_features import features_for_candidate
+    from app.db import IncidentLabelRow, IncidentRow, make_session_factory
+
+    aware = lambda dt: dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    model = learned.load()
+    out, skipped = [], []
+    with make_session_factory(db_url, create_schema=False)() as s:
+        for lab, inc in s.execute(select(IncidentLabelRow, IncidentRow).join(IncidentRow, IncidentRow.id == IncidentLabelRow.incident_id)):
+            lookback = None
+            if not (inc.summary or {}).get("analysis_window_seconds"):
+                # Recorded before the window was stored: do not reach back past the previous incident,
+                # whose fault traffic would otherwise count as this one's baseline. A heuristic: an
+                # incident detected just after a sibling of the same fault may still not rebuild.
+                prev = s.scalar(select(IncidentRow.detected_at).where(IncidentRow.tenant_id == inc.tenant_id,
+                                                                      IncidentRow.detected_at < inc.detected_at)
+                                .order_by(IncidentRow.detected_at.desc()))
+                if prev is not None:
+                    lookback = min(900.0, (aware(inc.detected_at) - aware(prev)).total_seconds())
+            ctx = load_context(s, inc, lookback_seconds=lookback)
+            if ctx is None:
+                skipped.append(inc.id)
+                continue
+            feats = features_for_candidate(ctx.candidate, ctx.samples, ctx.features, ctx.timeouts, ctx.spans)
+            summary = inc.summary or {}
+            out.append({"incident_id": inc.id, "label": lab.label, "features": feats, "rule_answer": summary.get("rule_answer"),
+                        "investigated_answer": investigated_answer(s, inc),
+                        "containment": ((summary.get("propagation") or {}).get("earliest_containment") or {}).get("node"),
+                        "shadow_prediction": model.predict(feats)["prediction"] if model else None,
+                        "shadow_version": model.version if model else None})
+    return out, skipped
+
+
 def scores(truth: list[str], pred: list[str]) -> dict:
     n = len(truth)
     if not n:
@@ -58,13 +105,15 @@ def scores(truth: list[str], pred: list[str]) -> dict:
 
 
 def full_model_predictions(rows: list[dict]) -> list[str] | None:
-    path = ROOT / "models" / "root_cause_v1.joblib"
+    path = ROOT / "models" / "root_cause_v2.joblib"
     if not path.exists():
         return None
     import joblib
     import numpy as np
 
     art = joblib.load(path)  # our own artifact, produced by notebooks/root_cause_model.ipynb
+    if not rows or any(f not in r["features"] for r in rows for f in art["features"]):
+        return None  # nothing to score, or rows recorded with an older feature set
     X = np.array([[r["features"][f] for f in art["features"]] for r in rows])
     proba = art["model"].predict_proba(X)
     classes = list(art["model"].classes_)
@@ -75,11 +124,15 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sentinel")
     ap.add_argument("--file")
+    ap.add_argument("--recompute-from", help="SentinelOps database URL: recompute features with the current code")
     ap.add_argument("--out", default="campaign/results")
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    if args.file:
+    skipped: list[str] = []
+    if args.recompute_from:
+        rows, skipped = recompute(args.recompute_from)
+    elif args.file:
         rows = json.loads(Path(args.file).read_text(encoding="utf-8"))
     else:
         rows = fetch(args.sentinel, os.environ["SENTINEL_TOKEN"])
@@ -97,7 +150,9 @@ def main() -> None:
         systems["full model (local)"] = full
 
     lines = ["# Evaluation on real labelled incidents", "",
-             f"{len(rows)} labelled incidents, {len(usable)} with stored features. Labels by distribution: "
+             f"{len(rows)} labelled incidents, {len(usable)} with stored features"
+             + (f"; {len(skipped)} could not be rebuilt from stored events and are not scored ({', '.join(skipped)})" if skipped else "")
+             + ". Labels by distribution: "
              + ", ".join(f"{k} {v}" for k, v in Counter(truth).most_common()) + ".", "",
              "| System | n | Exact accuracy | Decision accuracy | Incorrect intervention | Missed actionable |",
              "| --- | --- | --- | --- | --- | --- |"]

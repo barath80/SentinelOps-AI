@@ -13,12 +13,12 @@ code = nbf.v4.new_code_cell
 cells = [
 md("""# SentinelOps AI: training the root-cause classifier
 
-**Goal.** Given an incident that the SentinelOps detector has raised from telemetry (logs and request metrics), predict its cause:
-`release_regression`, `payment_provider_timeout`, `slow_dependency`, `traffic_surge`, `unknown` (a real fault with no distinguishing signal), or `no_fault` (a false alarm on healthy traffic). The model must also **abstain** when it is not confident, because a wrong cause leads to a wrong recovery action.
+**Goal.** Given an incident that the SentinelOps detector has raised from telemetry (request logs and, where they exist, request traces), predict its cause:
+`release_regression`, `payment_provider_timeout`, `slow_dependency`, `traffic_surge`, `db_pool_exhaustion`, `cache_unavailable`, `resource_saturation`, `retry_storm`, `unknown` (a real fault with no distinguishing signal), or `no_fault` (a false alarm on healthy traffic). The model must also **abstain** when it is not confident, because a wrong cause leads to a wrong recovery action.
 
 **What this notebook does**
 1. Generates labelled incidents with a parametric simulator (random traffic, noise, cold starts, missing logs, partial faults, decoy deployments).
-2. Extracts features with the production detector, from telemetry only: no label can leak into the features.
+2. Extracts features with the production detector, from telemetry only: no label can leak into the features. Version 2 adds trace features (time waiting for a connection, in queries, in failed cache calls and on-CPU, provider calls per request); without traces they are 0.
 3. Trains and tunes three algorithms with stratified 5-fold cross-validation: logistic regression, random forest, gradient boosting.
 4. Calibrates probabilities and picks an abstention threshold on a separate validation split.
 5. Tests on two held-out sets: **in-distribution** (same simulator settings, unseen seeds) and **shifted** (sparser, noisier, more decoys and missing logs) to measure robustness.
@@ -40,7 +40,8 @@ warnings.filterwarnings("ignore", category=UserWarning)
 SEED = 20261027
 rng = np.random.default_rng(SEED)
 LABELS = CLASSES + ["no_fault"]          # "none" (healthy traffic) becomes no_fault when the detector fires anyway
-ACTIONABLE = {"release_regression", "payment_provider_timeout", "slow_dependency"}  # causes with a recovery action
+ACTIONABLE = {"release_regression", "payment_provider_timeout", "slow_dependency", "db_pool_exhaustion",
+              "cache_unavailable", "resource_saturation", "retry_storm"}  # causes with a recovery action
 print("python", platform.python_version(), "| sklearn", sklearn.__version__, "| features:", len(FEATURES))"""),
 
 md("""## 1. Data
@@ -61,7 +62,7 @@ code("""def build(dist, seeds, per_class, name):
                          **{f"param_{k}": v for k, v in sample.params.items()}})
         misses[label] = missed
     df = pd.DataFrame(rows)
-    print(f"{name}: {len(df)} incidents raised from {per_class * 6} simulated runs; detector missed:", misses)
+    print(f"{name}: {len(df)} incidents raised from {per_class * (len(CLASSES) + 1)} simulated runs; detector missed:", misses)
     return df
 
 t0 = time.time()
@@ -263,10 +264,10 @@ md("""## 9. Export
 The calibrated model is saved with its feature list, classes, abstention threshold, metrics and the exact data specification, so a run can be reproduced and audited. A model card summarises it for reviewers."""),
 
 code("""out = ROOT / "models"; out.mkdir(exist_ok=True)
-artifact = {"model": model, "features": FEATURES, "classes": classes, "tau": TAU, "version": "root-cause-v1"}
-joblib.dump(artifact, out / "root_cause_v1.joblib")
+artifact = {"model": model, "features": FEATURES, "classes": classes, "tau": TAU, "version": "root-cause-v2"}
+joblib.dump(artifact, out / "root_cause_v2.joblib")
 meta = {
-    "version": "root-cause-v1", "algorithm": best_name, "best_params": cv_df.iloc[0]["best_params"],
+    "version": "root-cause-v2", "algorithm": best_name, "best_params": cv_df.iloc[0]["best_params"],
     "calibration": f"{CALIBRATION}, 5-fold", "calibration_comparison": cal_df.to_dict(orient="records"), "tau": TAU, "target_precision": TARGET_PRECISION, "features": FEATURES, "classes": classes,
     "cv": cv_df.drop(columns="best_params").to_dict(orient="records"),
     "test_results": {f"{a} | {b}": v for (a, b), v in res.to_dict(orient="index").items()},
@@ -274,10 +275,10 @@ meta = {
              "testB_seeds": [200000, 200400], "train_rows": int(len(train_df)), "testA_rows": int(len(testA_df)), "testB_rows": int(len(testB_df))},
     "environment": {"python": platform.python_version(), "sklearn": sklearn.__version__, "numpy": np.__version__},
 }
-(out / "root_cause_v1.json").write_text(json.dumps(meta, indent=2, default=str))
-print("saved", out / "root_cause_v1.joblib", "and", out / "root_cause_v1.json")"""),
+(out / "root_cause_v2.json").write_text(json.dumps(meta, indent=2, default=str))
+print("saved", out / "root_cause_v2.joblib", "and", out / "root_cause_v2.json")"""),
 
-code("""reloaded = joblib.load(out / "root_cause_v1.joblib")
+code("""reloaded = joblib.load(out / "root_cause_v2.joblib")
 check = decide(reloaded["model"].predict_proba(testA_df[FEATURES].to_numpy()[:200]), reloaded["tau"])
 assert (check == preds["A: in-distribution"][1][:200]).all()
 print("reloaded model reproduces the test predictions")"""),
@@ -312,13 +313,13 @@ for set_name, df in (("A: in-distribution", testA_df), ("B: shifted", testB_df))
 pd.DataFrame(serving_results).set_index(["test set", "system"]).round(3)"""),
 
 code("""scaler, lr = serving.named_steps["standardscaler"], serving.named_steps["logisticregression"]
-spec = {"version": "root-cause-serving-v1", "algorithm": "logistic_regression", "C": lr_C, "features": FEATURES,
+spec = {"version": "root-cause-serving-v2", "algorithm": "logistic_regression", "C": lr_C, "features": FEATURES,
         "classes": s_classes, "scaler_mean": scaler.mean_.tolist(), "scaler_scale": scaler.scale_.tolist(),
         "coef": lr.coef_.tolist(), "intercept": lr.intercept_.tolist(), "tau": TAU_S, "target_precision": TARGET_PRECISION,
         "results": {f"{r['test set']}": {k: float(v) for k, v in r.items() if k not in ("test set", "system")}
                     for r in serving_results if r["system"].startswith("serving")},
         "trained_on": "simulated incidents (training/generator.py), see models/MODEL_CARD.md"}
-serve_path = ROOT / "app" / "models" / "root_cause_serving_v1.json"
+serve_path = ROOT / "app" / "models" / "root_cause_serving_v2.json"
 serve_path.write_text(json.dumps(spec, indent=1))
 print("wrote", serve_path, f"({serve_path.stat().st_size / 1024:.1f} KB)")
 
