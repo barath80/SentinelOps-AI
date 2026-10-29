@@ -48,6 +48,8 @@ code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, m
 .nav-item { display: flex; align-items: center; gap: .6rem; width: 100%; text-align: left; padding: .5rem .65rem; border-radius: 8px; border: 0;
   background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
 .nav-item:hover { background: var(--panel-2); color: var(--text); }
+.nav-external { margin-top: .75rem; border-top: 1px solid var(--border); border-radius: 0 0 8px 8px; text-decoration: none; color: var(--muted); }
+.nav-external span { margin-left: auto; }
 .nav-item[aria-current="page"] { background: var(--accent-2); color: var(--accent); font-weight: 600; }
 .nav-count { margin-left: auto; font-size: .72rem; background: var(--bad); color: #fff; border-radius: 999px; padding: 0 .45rem; }
 .sidebar-foot { margin-top: auto; padding: .5rem; color: var(--muted); font-size: .8rem; display: grid; gap: .5rem; }

@@ -1,303 +1,230 @@
 # SentinelOps AI
 
-**Evidence-driven incident investigation and controlled recovery.**
+**Evidence-driven incident investigation and controlled recovery for cloud applications.**
 
-SentinelOps AI is an AI-assisted reliability operations platform for cloud applications. It ingests telemetry and change events, groups related alerts, builds a timeline, ranks competing root-cause hypotheses with supporting and contradicting evidence, identifies missing observations, and proposes a bounded recovery plan. A policy layer gates every action, a recovery contract defines success and rollback conditions, and post-action telemetry decides whether recovery actually worked.
+SentinelOps watches a running application through its logs and traces. It detects when something
+goes wrong and works out *why*, with the evidence for and against every possible cause. It then
+fixes the problem through a recovery contract that a policy, a second person and post-fix telemetry
+all have to agree with. It can also resolve incidents automatically, for causes you opt in.
 
-> **Design principle:** never confuse a plausible explanation with a proven cause; never treat an executed action as a verified recovery.
-
-**Status:** working prototype, deployed. The blueprint below is the plan; this section says what exists.
+> **Design principle:** never confuse a plausible explanation with a proven cause; never treat an
+> executed action as a verified recovery.
 
 | Live | URL |
 | --- | --- |
-| ShopSphere demo store (Vercel, Neon Postgres) | https://shopsphere-demo-beta.vercel.app |
-| SentinelOps API and dashboard (Render) | https://sentinelops-ai-lukk.onrender.com (dashboard at `/ui/`) |
+| SentinelOps dashboard and API (Render) | https://sentinelops-ai-lukk.onrender.com/ui/ |
+| ShopSphere, the monitored demo store (Vercel) | https://shopsphere-demo-beta.vercel.app |
+| Full design document: every choice and the reasons | [docs/design-and-architecture.md](docs/design-and-architecture.md) |
 
-| Built and tested | Where |
+## The problem
+
+Most incident tooling stops at alerting and correlation: it shows *what* is red and blames the
+latest deploy. The costly mistakes in operations are confident wrong actions, such as rolling back
+a healthy release while the payment provider is the real problem, and false "resolved" claims. In
+the benchmark, a naive alert correlator named the wrong cause in 42% of faults, proposed the wrong
+fix just as often, and claimed recoveries that had not happened in 72% of cases. SentinelOps is
+built to make both mistakes rare and visible.
+
+## What is new here, and how it differs
+
+AI-assisted root-cause analysis and guided remediation already exist (Elastic AI SRE, New Relic SRE
+Agent, Dynatrace, Meta's DrP). SentinelOps does not claim those ideas are new. What it combines and
+**measures** is a stricter discipline around them:
+
+| SentinelOps | Typical AIOps / LLM assistant |
 | --- | --- |
-| Demo store: 96-product catalogue, search and filters, accounts (email/password, Google when configured), checkout, orders, wishlist, password reset | [apps/shop-web](apps/shop-web) |
-| Fault injection: global (`FAULT_SCENARIO`) and scoped per request (`CHAOS_TOKEN`), faults S01-S08 and S11 as real behaviour (connection pool, cache, CPU burn, retrying payment client, clock offset) | `apps/shop-web/src/lib/faults.ts`, `pool.ts`, `cache.ts`, `payment.ts` |
-| Telemetry: structured logs and OpenTelemetry-style traces (with per-request CPU time) pushed to SentinelOps | `apps/shop-web/src/lib/log.ts`, `trace.ts` |
-| Ingestion: JSON, text, normalized, span and metric adapters; idempotent | [services/sentinel-api](services/sentinel-api) |
-| Detection, incident grouping, eight ranked cause hypotheses, evidence ledger, per-symptom attribution | `app/analysis/` |
-| Telemetry-quality check (clock running ahead) | `app/analysis/quality.py` |
-| Failure-propagation graph and earliest containment point, scored against ground truth | `app/analysis/propagation.py` |
-| Eight falsification tests (logs, metrics and traces) and the investigation loop | `app/analysis/diagnostics.py` |
-| Policy engine, recovery contracts, four-eyes approval, audit trail, SLO verification | `app/recovery/` |
-| Recovery rehearsal (counterfactual replay, gates approval) and rollback of failed actions | `app/recovery/rehearsal.py`, `contracts.py` |
-| Operator sign-in with roles (viewer, responder, approver, admin); machine token limited to ingest and analysis | `app/auth.py` |
-| Incident-to-prevention compiler with human review | `app/prevention.py` |
-| Learned root-cause model: notebook, model card, shadow mode in the API, incident labels | [notebook](services/sentinel-api/notebooks/root_cause_model.ipynb), [model card](services/sentinel-api/models/MODEL_CARD.md) |
-| Dashboard: overview, incident pages with evidence, logs, traces, metrics and the model's explanation, telemetry explorer, light/dark, phone layout | `app/ui/` |
-| Team notifications (Slack and signed webhooks) with evidence and links, outbox with retries, SSRF-safe URLs | `app/notify.py` |
-| Automatic remediation, opt-in per cause (propose or auto, rehearsal-gated, hourly cap, auto-rollback), alongside the manual path | `app/automation.py` |
-| Throttling (429) detection, API rate limits, security headers, central audit log | `app/analysis/throttle.py`, `app/ratelimit.py`, `app/audit.py` |
-| Incident timeline, similar past incidents (and what fixed them), postmortem drafts, SLOs with error-budget burn alerts, release markers on charts | `app/insights.py` |
-| Benchmark against baselines (simulated) | [docs/benchmark-results.md](docs/benchmark-results.md) |
-| Labelled-incident campaign and evaluation on the live system; end-to-end run of every new scenario, recovery and rollback on the real application | [docs/real-incidents.md](docs/real-incidents.md) |
-| Browser tests: shop checkout journey, dashboard sign-in, roles, four-eyes approval and execution | `apps/shop-web/e2e/`, `apps/shop-web/e2e-dashboard/` |
-| CI (tests, lint, typecheck, benchmark smoke run, image build), local stack | [.github/workflows/ci.yml](.github/workflows/ci.yml), [docker-compose.yml](docker-compose.yml) |
-
-**Headline results, with their limits.** On the simulated benchmark (12 scenarios plus 2 probes, 20 seeds each), full SentinelOps names the right cause in 179/180 determinable runs (99%) against 33% for a naive log-based alert correlator, proposes a wrong recovery action in 0/200 fault runs against 42%, names the true origin as the earliest containment point in 157/160 runs, and flags the clock-skew scenario every time with no false warnings in 260 other runs. Rehearsal alone halves wrong actions (20% to 10%) and removes them on the probes. The scenarios were written by the same author as the system, and SentinelOps reads traces that the baselines do not, so these numbers show the mechanisms work, not that they generalize. On the real application run locally, every scenario was diagnosed correctly after investigation (8/8 labelled incidents, containment point right 7/7), all seven recoveries succeeded through the real executor and a rollback was verified to restore the fault. On 12 real labelled incidents from the deployed system the rule engine was right 11 times and the learned shadow model 12 times, with no wrong recovery action from either; 12 incidents give wide intervals (see the report).
-
-**Not built or not yet run:** the LLM-only baseline run (needs an `ANTHROPIC_API_KEY`); the campaign for S02, S04, S06, S07 and S11 against the *deployed* shop and API (it has been run end to end against the real application locally; the deployed run needs the new code deployed); single sign-on and multiple tenants; a sandbox *copy* of production (rehearsal replays recorded telemetry instead); a production executor (out of scope by design). The learned model runs in shadow mode only and never drives a decision.
-
-## Run it
-
-```
-# Tests
-cd services/sentinel-api && pip install -r requirements.txt && python -m pytest -q
-cd apps/shop-web && npm ci && npm run typecheck && npm run lint && npm test
-cd apps/shop-web && npx playwright install chromium && npx playwright test        # shop journeys
-cd apps/shop-web && npx playwright test -c playwright.dashboard.config.ts            # dashboard (starts the API)
-
-# SentinelOps API + dashboard with its own Postgres (http://localhost:8000/ui/, admin / change-me-local-only)
-docker compose up --build
-
-# Or without Docker (PowerShell: $env:NAME="value")
-cd services/sentinel-api
-SENTINEL_INGEST_TOKEN=<machine token> SENTINEL_SESSION_SECRET=<32+ random chars> \
-SENTINEL_BOOTSTRAP_ADMIN=admin:<12+ char password> python -m uvicorn app.asgi:app --port 8000
-
-# The shop locally, pushing to it, with an in-memory order store (no real database is touched)
-cd apps/shop-web && npm run build
-SHOP_DB=memory CHAOS_TOKEN=<16+ chars> ADMIN_TOKEN=<secret> SENTINEL_INGEST_URL=http://127.0.0.1:8000 \
-SENTINEL_INGEST_TOKEN=<machine token> npx next start -p 3000
-
-# Benchmark (simulated, hidden ground truth)
-cd services/sentinel-api && python -m benchmark --seeds 20 --out ../../docs/benchmark-results.md
-
-# Labelled campaign against a running shop + API (scoped faults; a responder operator labels)
-CHAOS_TOKEN=... SENTINEL_TOKEN=<machine token> SENTINEL_OPERATOR=campaign SENTINEL_OPERATOR_PASSWORD=... \
-python -m campaign.run_campaign --shop <shop> --sentinel <api> --scenarios S01 S02 S03 S04 S05 S06 S07 S08 none surge S11 --investigate
-python -m campaign.evaluate --sentinel <api>
-
-# End-to-end recovery and rollback through the real shop_admin executor (API started with
-# SENTINEL_EXECUTOR=shop_admin; use a shop instance nobody else uses: faults are switched globally)
-SHOP_ADMIN_TOKEN=... SENTINEL_TOKEN=... SENTINEL_RESPONDER=alice:... SENTINEL_APPROVER=bob:... \
-python -m campaign.e2e_recovery --shop <shop> --sentinel <api> --scenarios S01 S02 S03 S04 S05 S06 S07 --rollback S02
-```
-
-## Research question
-
-Does falsification-guided diagnosis plus risk-aware recovery reduce incorrect interventions and failed recoveries compared with simple alert correlation and LLM-only baselines?
-
-## Key features
-
-| Feature | Summary |
-| --- | --- |
-| Evidence ledger | Every claim links to a retrievable source (metric query, log, trace span, deployment, runbook). The LLM cannot invent IDs or values. |
-| Self-challenging root-cause engine | Ranks hypotheses with a transparent, versioned score, then runs read-only tests meant to *disprove* the leader. Reports uncertainty instead of forcing a winner. |
-| Diagnostic-test selection | Picks allow-listed read-only checks by expected information gain and cost. |
-| Failure-propagation reconstruction | Temporal graph of observed, inferred and unknown edges; earliest-containment analysis. |
-| Recovery rehearsal lab | Applies a candidate action in an isolated sandbox before anything else. Results are labelled as sandbox evidence. |
-| Blast-radius prediction | Dependency-graph reachability and a conservative risk score (not a probability). |
-| Recovery contracts | Machine-readable target, preconditions, guardrails, verification window and rollback, evaluated by code. |
-| Incident-to-prevention compiler | Proposes regression tests, alert rules and runbook edits for human review. Nothing is auto-merged. |
-| Reliability Challenge Arena | Reproducible benchmark: alert-correlation baseline vs LLM-only vs SentinelOps on identical telemetry and budgets. |
-
-## Reference application: ShopSphere
-
-A small instrumented e-commerce system (web frontend, gateway, catalog, cart, checkout/order, payment simulator, inventory, PostgreSQL, Redis, load generator, fault injector) serves as both realistic workload and controlled lab. No real payments or personal data are involved.
-
-Initial SLI targets (demo defaults, to be calibrated):
-
-- Checkout success rate ≥ 99% over a 5-minute window
-- Checkout p95 latency < 500 ms under fixed demo load
-- HTTP 5xx rate < 1%
-- Zero duplicate orders per idempotency key
-- Recovery verification returns **pass / fail / inconclusive**, never inferred from action execution
-
-## Scenario catalogue (initial 12)
-
-S01 bad checkout deployment · S02 DB connection-pool exhaustion · S03 slow query · S04 Redis/cache unavailable · S05 payment simulator timeout · S06 CPU saturation · S07 retry storm · S08 missing telemetry · S09 misleading deployment correlation · S10 two simultaneous faults · S11 clock skew / delayed events · S12 unsafe remediation candidate.
-
-Ground-truth labels live in a separate benchmark schema and are never visible to the diagnosis agent.
+| **Evidence ledger**: every claim cites the stored events it came from, including **counter-evidence** and **missing** evidence | A summary or a correlation score; sources are often implicit |
+| **Falsification**: read-only tests try to *disprove* the leading cause before anyone acts | Ranks by similarity or likelihood; rarely tests against the leader |
+| **Abstains**: reports "inconclusive" when the evidence does not separate the causes | Usually names a cause regardless |
+| **Recovery contracts**: preconditions, success SLIs, guardrails, a verification window and a rollback, checked by code | Runs a runbook step and closes the ticket |
+| **Rehearsal**: replays recorded telemetry with the fix applied, before approval | No pre-check, or a full staging copy |
+| **Outcome from telemetry only**: pass, fail or inconclusive is measured after the action; "it ran" is never "it worked" | Execution is treated as success |
+| **Earliest containment point** from a propagation graph, scored against ground truth | Service maps without a containment answer |
+| **Reproducible benchmark** with hidden ground truth, baselines and an ablation | Vendor claims |
 
 ## Architecture
 
-A modular monolith control plane plus separately deployed demo services.
+A **modular monolith** (one FastAPI process with strict module boundaries) plus a separately deployed
+demo shop. They share no code and no database; two narrow HTTPS interfaces connect them.
 
+```mermaid
+flowchart LR
+    U[Shoppers] --> S
+    O[Operators<br/>browser, signed in] --> D
+    subgraph V[Vercel]
+      S[ShopSphere store<br/>Next.js 16 + React 19<br/>scoped fault injection]
+    end
+    subgraph R[Render: SentinelOps API, FastAPI in Docker]
+      D[Dashboard /ui<br/>static JS, strict CSP]
+      I[Ingest + adapters<br/>idempotent]
+      A[Analysis engine<br/>detect, rank, falsify,<br/>propagate, shadow ML]
+      C[Recovery<br/>policy, contract, rehearse,<br/>verify, rollback]
+      M[Automation<br/>opt-in, gated, capped]
+      N[Notify outbox]
+      X[Auth, rate limits, audit]
+    end
+    S -- logs + spans over HTTPS --> I
+    C -- policy-approved action --> S
+    N --> K[Slack / signed webhooks]
+    S --> P1[(Neon Postgres<br/>shop)]
+    I --> P2[(Neon Postgres<br/>SentinelOps)]
+    A --> P2
+    C --> P2
 ```
-React + TS dashboard ──► FastAPI API / Auth
-                              │
-     ┌────────────────────────┼─────────────────────────┐
- Incident & Correlation   Policy / Recovery Contract   Retrieval (runbooks, cases)
-     └────────────────────────┼─────────────────────────┘
-                   PostgreSQL (incidents, evidence, hypotheses, approvals, outcomes)
-                              ▲
-        Redis queue + workers ┴ LLM adapter (structured output)
-                              ▲
-   OpenTelemetry Collector → Prometheus (metrics) + Loki (logs) + traces
-                              ▲
-                     ShopSphere demo services
+
+**From telemetry to verified recovery**
+
+```mermaid
+flowchart LR
+    T[Logs and traces] --> DET[Detect<br/>last 120 s vs baseline]
+    DET --> G[Group into<br/>one incident]
+    G --> H[8 hypotheses<br/>+ evidence ledger]
+    H --> F{Falsification<br/>tests}
+    F -- leader survives --> L[Leading cause]
+    F -- no clear winner --> IN[Inconclusive:<br/>no action]
+    L --> K[Recovery contract]
+    K --> P{Policy<br/>default deny}
+    P -- denied --> B[Blocked]
+    P -- allowed --> RH[Rehearsal]
+    RH --> AP{Four-eyes<br/>approval}
+    AP --> EX[Execute once]
+    EX --> VF{SLO verification<br/>from telemetry}
+    VF -- pass --> OK[Succeeded]
+    VF -- fail or inconclusive --> RB[Rollback]
 ```
 
-Main modules: telemetry adapter, normalizer, anomaly detector, incident grouper, hypothesis engine, evidence ledger, falsification planner, impact estimator, recovery rehearsal, policy engine, recovery verifier, prevention compiler, benchmark runner.
+## Main features
 
-Recovery state machine:
-
-```
-PENDING → VALIDATED → AWAITING_APPROVAL → SIMULATING → READY_FOR_SANDBOX_ACTION
-        → EXECUTING → VERIFYING → SUCCEEDED | FAILED | INCONCLUSIVE | ROLLED_BACK
-```
-
-## Tech stack (MVP)
-
-| Layer | Choice |
-| --- | --- |
-| Frontend | React, TypeScript, Vite, Tailwind CSS |
-| Backend | Python 3.12+, FastAPI, Pydantic |
-| Database | PostgreSQL (JSONB, full-text search; pgvector only if retrieval evaluation justifies it) |
-| Queue | Redis with one of RQ / Arq / Celery |
-| Observability | OpenTelemetry, Prometheus, Loki, Grafana |
-| AI | Rules and statistics first; provider-neutral LLM adapter with structured JSON output |
-| Analytics | NumPy, pandas, SciPy, scikit-learn |
-| Sandbox / load / faults | Docker Compose, Locust or k6, Python fault toggles / Toxiproxy |
-| CI/CD | GitHub Actions |
-
-Principle: one frontend, one backend, one database, one queue, one metrics system, one log system, one LLM adapter. Add components only when a measurement justifies them.
-
-## AI and safety rules
-
-- Deterministic code owns telemetry, permissions and recovery status. The LLM only synthesizes and explains.
-- LLM output is validated with Pydantic; unknown evidence IDs, tools, or free-form commands are rejected.
-- Logs, runbooks and external feeds are treated as untrusted (prompt-injection aware).
-- The policy engine is default-deny with allow-listed action templates. There is no shell and no arbitrary SQL tool.
-- The MVP is read-only against telemetry and mutates only mock or sandbox resources. There are no production mutations.
-- Secrets are redacted before model calls. Model, prompt version, evidence IDs and token cost are logged.
-- If the LLM is unavailable, the system still ingests data and shows evidence (degraded mode).
-
-## Planned API (v1)
-
-`POST /api/v1/telemetry/events` · `POST|GET /api/v1/incidents` · `GET /api/v1/incidents/{id}` · `.../hypotheses` · `.../evidence` · `POST .../diagnostics` · `POST /api/v1/recovery-contracts` · `.../approve` · `.../simulate` · `.../verification` · `POST /api/v1/benchmark-runs`
-
-## Observability of SentinelOps itself
-
-The platform monitors its own reliability with Prometheus metrics such as `sentinel_events_ingested_total`, `sentinel_events_rejected_total`, `sentinel_queue_depth`, `sentinel_oldest_job_age_seconds`, `sentinel_investigation_duration_seconds`, `sentinel_llm_requests_total`, `sentinel_evidence_validation_failures_total`, `sentinel_recovery_actions_blocked_total`, `sentinel_recovery_verification_total`, `sentinel_sandbox_runs_active` and `sentinel_db_pool_wait_seconds`. High-cardinality identifiers (incident UUIDs, request IDs) go in logs and traces, never in metric labels.
-
-## Novelty and positioning
-
-AI-assisted root-cause analysis, multi-hypothesis investigation, runbook retrieval and guided remediation already exist in products such as Elastic AI SRE, New Relic SRE Agent, Dynatrace Intelligence and Meta's DrP. SentinelOps does not claim these ideas are new. Comparisons are based on public vendor descriptions, not a patent search or market survey.
-
-What it aims to demonstrate, with measurements:
-
-| Contribution | What must be shown |
-| --- | --- |
-| Evidence ledger with counterevidence | Every claim resolves to source data; counterevidence and missing data are visible and validated |
-| Falsification-guided diagnostics | Fewer wrong top-ranked diagnoses under decoy and counterexample scenarios |
-| Recovery rehearsal with risk comparison | Reproducible comparison of candidate fixes in an isolated environment |
-| Recovery contracts with SLO verification | Pass / fail / inconclusive status; execution is never treated as success |
-| Propagation timeline and earliest containment | Ground-truth evaluation of propagation order and earliest preventable point |
-| Incident-to-prevention traceability | Verified cause linked to a passing regression test and a reviewed rule |
-| Reliability Challenge Arena | Hidden ground truth, safety metrics and reproducible baseline comparison |
-
-## Evaluation
-
-Three systems are compared on identical telemetry and diagnostic budgets: an alert-correlation baseline, an LLM-only baseline, and SentinelOps. Start with 12 scenarios and grow to at least 50 seeded, parameterized runs.
-
-Metrics: top-1/top-3 root-cause accuracy, evidence precision, false-diagnosis rate, abstention quality, diagnostic cost, recovery success, unsafe-action rate, end-to-end time, and cost per incident and per verified recovery. Repeated runs are reported with variation, and failures and inconclusive results are published.
-
-## Deployment and cost
-
-Build and demo locally with Docker Compose first. Deploy only the public pieces later (static frontend, small API container, managed Postgres, short telemetry retention). Set a hard monthly budget and billing alerts before enabling paid resources, cap LLM tokens per incident, and start sandboxes on demand with hard timeouts. No Kubernetes or vector database until measurements require them.
-
-## Non-goals (first release)
-
-Replacing human SREs, unrestricted production shell access, guaranteed root-cause certainty, training a foundation model, and a full Kubernetes platform before the core workflow works.
-
-## MVP scope
-
-| Build first | Add after the core is stable | Avoid initially |
+| Area | What it does | Where |
 | --- | --- | --- |
-| ShopSphere demo and telemetry | Information-gain diagnostic selection | Training a foundation model |
-| Incident timeline and evidence ledger | Recovery rehearsal | Unrestricted production auto-remediation |
-| Basic hypothesis scoring | Blast-radius scoring | Full Kubernetes without need |
-| Missing-evidence reporting | Incident similarity, prevention PR generation | Separate graph database without need |
-| Approval-gated mock actions | Richer causal analysis | Kafka before throughput requires it |
-| Recovery verification | Multi-tenant production hardening | Too many overlapping agents |
-| Twelve fault scenarios | Automated prevention artifacts | Always-on GPU |
+| Telemetry | JSON logs, text logs, OpenTelemetry-style spans and metrics through adapters; content-hash ids make ingest idempotent | `app/adapters.py` |
+| Detection | Per route: 5xx rate and p95 latency over the last 120 s against a healthy baseline, with fixed, named thresholds; 429 throttling reported separately | `app/analysis/detect.py`, `throttle.py` |
+| Root-cause engine | 8 causes ranked by a transparent, versioned score with an evidence ledger; abstains when unsure | `app/analysis/hypotheses.py` |
+| Falsification | 8 read-only tests over stored logs and traces, chosen by information gain, that try to disprove the leader | `app/analysis/diagnostics.py` |
+| Propagation | Failure-spread graph from traces and the earliest containment point | `app/analysis/propagation.py` |
+| Telemetry quality | Detects a clock running ahead (events from the future) instead of diagnosing from it | `app/analysis/quality.py` |
+| Recovery contracts | Default-deny policy, blast radius, rehearsal, four-eyes approval with a 30-minute expiry, execution at most once, SLO verification, rollback | `app/recovery/` |
+| Automatic remediation | Opt-in per cause (`manual`, `propose`, `auto`): needs a confirmed cause, a passing rehearsal, risk within a ceiling and an hourly cap; auto-rollback | `app/automation.py` |
+| Learned model | 25-feature root-cause classifier trained in a notebook; served in **shadow mode** (recorded, never obeyed), with per-feature explanations | [notebook](services/sentinel-api/notebooks/root_cause_model.ipynb), [model card](services/sentinel-api/models/MODEL_CARD.md) |
+| Insights | Timeline, similar past incidents and what fixed them, postmortem drafts, SLOs with 14.4x burn-rate alerts, release markers | `app/insights.py` |
+| Prevention compiler | After a verified fix: a regression test, an alert rule and a runbook edit, for human review only | `app/prevention.py` |
+| Notifications | Slack and HMAC-signed webhooks through an outbox with retries; SSRF-safe URLs | `app/notify.py` |
+| Security | Operator accounts and roles, scrypt passwords, signed sessions, sign-in lockout, rate limits, central audit log, strict headers | `app/auth.py`, `ratelimit.py`, `audit.py` |
+| Dashboard | Overview, incidents with evidence, logs, trace waterfalls, charts, the model's explanation, SLOs, automation, notifications, audit, operators, and a link to the monitored store | `app/ui/` |
+| Demo store | A real shop (catalogue, cart, checkout, accounts) whose faults change real behaviour: connection pool, cache, CPU, payment client, release, clock | [apps/shop-web](apps/shop-web) |
+| Benchmark | 12 scenarios + 2 probes, hidden ground truth, alert-correlator and LLM (Claude or Gemini) baselines, ablations | `services/sentinel-api/benchmark/` |
 
-## Roadmap (proposed 20 weeks)
+## Tech stack, and why
 
-| Phase | Weeks | Deliverables | Acceptance criteria |
-| --- | --- | --- | --- |
-| 0 Foundation | 1 | Repo, ADR, Docker Compose, CI | One-command startup; lint and smoke tests pass |
-| 1 Shop demo | 2–3 | Catalogue, cart, checkout, payment simulator, seed data | Simulated order completes; no real payment |
-| 2 Telemetry | 4–5 | OpenTelemetry metrics, logs, traces, deployment and fault events | A known request has correlated trace, log and metric refs |
-| 3 Incident core | 6–7 | Anomaly detection, grouping, timeline, evidence schema | A fault creates one incident with source-linked evidence |
-| 4 AI investigation | 8–9 | Hypothesis ranking, counterevidence, uncertainty, schema validation | Unknown evidence IDs rejected; ambiguous cases can abstain |
-| 5 Safety and recovery | 10–11 | Recovery contracts, approvals, mock action, SLO verification | Unsafe actions blocked; pass/fail/inconclusive tests pass |
-| 6 Research features | 12–14 | Falsification planner, rehearsal, impact estimate, prevention proposals | 12 scenario types and baseline comparisons |
-| 7 Public demo | 15–16 | Deployment, docs, cost guardrails, demo account | External tester reproduces at least 5 scenarios |
-| 8 Evaluation and paper | 17–20 | 50+ runs, metrics, ablations, limitations, report | Reproducible results and failure analysis |
+| Layer | Choice | Why this, not the alternative |
+| --- | --- | --- |
+| API | Python 3.12, FastAPI, Pydantic | Typed request validation and settings; the analysis and ML code is Python too |
+| Database | PostgreSQL on Neon, through SQLAlchemy 2 (SQLite in tests) | Transactions, compare-and-set state changes and unique constraints enforce the safety rules. A document store or Elasticsearch cannot guarantee them |
+| Messaging | Outbox table in Postgres | At-least-once delivery that never announces a rolled-back change, with no broker to run |
+| Dashboard | Plain JavaScript, no build step | Meets a strict CSP with no inline script, ships inside the API image, no npm supply chain on a tool that changes production |
+| Observability | SentinelOps' own store and charts | Grafana, Prometheus and Loki store and display data, but hold no hypotheses, evidence or contracts. Raw requests are kept so every number can be cited as evidence |
+| ML | scikit-learn in the notebook; a JSON logistic regression served in pure Python | No pickle loading or native libraries in the API; exact explanations |
+| Demo store | Next.js 16, React 19 on Vercel | One framework for pages and API routes; free hosting and per-push deploys |
+| Hosting | Render (Docker), Vercel, Neon | Each free tier fits one part; Render keeps the background loops alive |
+| CI | GitHub Actions | Tests, lint, type checks, browser tests, benchmark smoke run, image build |
 
-A smaller MVP can ship sooner by deferring causal ML, sandbox cloning and automated prevention artifacts.
+## Results
 
-## Planned repository layout
+| Measure (simulated benchmark, 20 seeds) | Alert correlator | SentinelOps |
+| --- | --- | --- |
+| Correct cause named | 33% | **99%** (179/180) |
+| Wrong recovery action proposed | 42% | **0%** (0/200) |
+| Claimed a recovery that did not happen | 72% | **0%** |
+| True origin named as the containment point | n/a | 98% |
+
+On the real application, every scenario was diagnosed correctly after investigation, all 7
+recoveries succeeded through the real executor, and a rollback restored the fault. On the deployed
+system's 25 labelled incidents, the shadow model was right 25 times and the rules (before
+investigation) 19 times. The scenarios were written by the same author as the system, so these show
+the mechanisms work, not that they generalize. Details and intervals:
+[benchmark](docs/benchmark-results.md), [real incidents](docs/real-incidents.md).
+
+## Run it
+
+**Requirements:** Python 3.12, Node.js 22. Docker is optional (for the local stack), and so is a
+Postgres URL (SQLite works locally).
+
+```bash
+# API tests (229) and the shop's checks
+cd services/sentinel-api && pip install -r requirements.txt && python -m pytest -q
+cd apps/shop-web && npm ci && npm run typecheck && npm run lint && npm test
+cd apps/shop-web && npx playwright install chromium && npx playwright test          # shop journeys
+cd apps/shop-web && npx playwright test -c playwright.dashboard.config.ts             # dashboard in a browser
+
+# Everything locally with its own Postgres: http://localhost:8000/ui/  (admin / change-me-local-only)
+docker compose up --build
+```
+
+**Without Docker** (PowerShell: `$env:NAME="value"`):
+
+```bash
+cd services/sentinel-api
+SENTINEL_INGEST_TOKEN=<machine token> SENTINEL_SESSION_SECRET=<32+ random chars> \
+SENTINEL_BOOTSTRAP_ADMIN=admin:<12+ char password> SENTINEL_SHOP_URL=http://localhost:3000 \
+python -m uvicorn app.asgi:app --port 8000
+
+cd apps/shop-web && npm run build
+SHOP_DB=memory CHAOS_TOKEN=<16+ chars> ADMIN_TOKEN=<secret> SENTINEL_INGEST_URL=http://127.0.0.1:8000 \
+SENTINEL_INGEST_TOKEN=<machine token> npx next start -p 3000
+```
+
+**Benchmark, campaign and end-to-end recovery**
+
+```bash
+cd services/sentinel-api
+python -m benchmark --seeds 20 --out ../../docs/benchmark-results.md     # add GEMINI_API_KEY or ANTHROPIC_API_KEY for the LLM baseline
+CHAOS_TOKEN=... SENTINEL_TOKEN=... SENTINEL_OPERATOR=campaign SENTINEL_OPERATOR_PASSWORD=... \
+  python -m campaign.run_campaign --shop <shop> --sentinel <api> --scenarios S01 S02 S03 S04 S05 S06 S07 S08 none surge S11 --investigate
+python -m campaign.evaluate --sentinel <api>
+```
+
+Deploying your own copy: [docs/deploy-api.md](docs/deploy-api.md).
+
+## How to use it
+
+1. **Sign in** to the dashboard. The first admin comes from `SENTINEL_BOOTSTRAP_ADMIN`. Create
+   accounts under **Operators** with a role: `viewer`, `responder`, `approver` or `admin`.
+2. **Overview** shows route health, open incidents, contracts waiting and any telemetry warnings. The
+   **ShopSphere store** link in the sidebar opens the monitored application.
+3. **Open an incident.** Read the leading cause, its score breakdown and the evidence. Every line
+   opens the log events and traces it came from. Press **Investigate** to run the falsification tests.
+4. **Propose** the recommended fix (responder). The contract shows its policy decision, blast radius
+   and rehearsal result. **Approve** it as a different person (approver), then **Execute**.
+5. **Verification** reports Succeeded, Failed or Inconclusive from post-fix telemetry. A failed fix can
+   be **rolled back**.
+6. **Label** the incident with its true cause, review the postmortem draft and the prevention
+   proposals.
+7. **Automate** trusted causes under **Automation** (admin), and add a Slack or webhook channel under
+   **Notifications**.
+
+## Repository layout
 
 ```
-apps/            shop-web, sentinel-dashboard
-services/        shop-api, catalog, cart, checkout, payment-simulator, inventory,
-                 sentinel-api (FastAPI control plane), sentinel-worker
-packages/        telemetry-contracts, api-schemas, shared-test-fixtures
-sentinelops/     ingestion, normalization, anomaly_detection, incident_correlation,
-                 hypotheses, evidence_ledger, falsification, retrieval,
-                 impact_estimation, recovery_contracts, sandbox, verification,
-                 prevention_compiler, benchmark, policy
-infra/           docker-compose.yml, otel-collector.yaml, prometheus.yml, loki-config.yaml, dashboards/
-scenarios/       S01_bad_deployment/, S02_db_pool_exhaustion/, ...
-runbooks/  migrations/  tests/{unit,integration,e2e,security,load}  docs/  .github/workflows/
+apps/shop-web/                 ShopSphere store (Next.js), fault injection, telemetry push, Playwright tests
+services/sentinel-api/
+  app/                         FastAPI application
+    analysis/                  detection, hypotheses, diagnostics, propagation, quality, learned model
+    recovery/                  policy, contracts, rehearsal, SLO verification, executors
+    ui/                        dashboard (static HTML, JS, CSS)
+    automation.py notify.py insights.py prevention.py auth.py audit.py ratelimit.py telemetry_api.py
+  benchmark/                   simulated scenarios, baselines (alert correlator, LLM), metrics, report
+  campaign/                    labelled campaign and end-to-end recovery runners for a live system
+  training/  notebooks/  models/   ML data generator, training notebook, model card
+  tests/                       229 tests
+docs/                          design document, benchmark and real-incident reports, deployment, blueprint
+render.yaml  docker-compose.yml  .github/workflows/ci.yml
 ```
 
-## Risks and mitigations
+## Limits
 
-| Risk | Mitigation |
-| --- | --- |
-| LLM hallucination | Evidence-ID validation, deterministic scoring, abstention |
-| Correlation mistaken for causation | Falsification checks, decoy scenarios, careful confidence language |
-| Sandbox differs from production | Record drift and workload similarity; require approval |
-| Unsafe action | Default-deny policy, allow-listed templates, no production mutation in MVP |
-| Telemetry gaps | Missing-evidence auditor, inconclusive status |
-| Cost spike | Budgets, caps, retention limits, auto-cleanup, billing alerts |
-| Duplicate queue delivery | Idempotency keys, state machine, unique DB constraints |
-| Tenant data leak | Tenant-scoped queries and explicit cross-tenant tests |
-| Wrong generated prevention code | CI tests, human review, no auto-merge |
-| Novelty overclaim | Document comparison method; report overlap honestly |
+Single tenant; local accounts (no single sign-on yet). Rehearsal replays recorded telemetry instead
+of a sandbox copy of production. The live executor is `mock`; there is no production executor, by
+design. Schema changes need a migration tool (Alembic) before any column changes. The free Render
+instance sleeps when idle, and telemetry pushed while it wakes is lost.
 
-## Reviewer demo script
-
-1. Complete an order in the normal storefront, then open the dashboard (healthy baseline, service map).
-2. Trigger S01 (bad deployment) from the Chaos Lab; show the timeline.
-3. Show at least three hypotheses (deployment and a DB-saturation alternative) and the evidence ledger with counterevidence and missing telemetry.
-4. Run a read-only falsification test, then a sandbox rehearsal labelled as simulation.
-5. Approve a mock rollback; watch the recovery contract evaluate SLOs and return pass, fail or inconclusive, with the full audit trail.
-6. Generate a regression test or alert rule awaiting human review.
-7. Repeat with S08 (missing telemetry) or S09 (misleading deployment) to show abstention and counterevidence.
-
-## Acceptance checklist
-
-- [x] Tester can complete the simulated shopping journey (live store; Playwright checkout journey on the in-memory store)
-- [x] Key requests are traceable (one trace per request with pool, query, payment and cache spans; the shop is a single service)
-- [x] Each fault scenario reliably produces its expected symptoms: S01, S03, S05, S08 on the deployed system; S01-S08 and S11 end to end on the real application locally (deployed run of the new ones pending)
-- [x] Hypotheses and evidence IDs resolve to real data; counterevidence and missing data are shown
-- [x] LLM failure does not erase incident or telemetry records (no LLM is in the decision path)
-- [x] Unknown evidence IDs and non-allow-listed actions are rejected
-- [x] Approval identity and decision are audited (signed-in operators; `X-Actor` is ignored)
-- [x] Recovery verification uses measured SLIs over the full window
-- [x] Sandbox resources are cleaned up: not applicable, rehearsal replays stored telemetry and creates no resources
-- [x] Ground truth is never exposed to the diagnosis agent (tested for every scenario)
-- [x] Benchmark reports baselines, failures, latency and cost (LLM tokens once the LLM baseline is run)
-- [ ] Deployment has HTTPS and secrets management (done); backups and spend alerts are account settings on Neon, Render and Vercel to switch on
-
-## Novelty caveat
-
-The project statement describes an intended contribution, not a verified world-first claim. Before a paper, patent filing or commercial claim, compare the exact workflow with recent papers, open-source projects and vendor documentation, and record the search terms, dates and exclusions.
-
-## References (starting points, not a literature review)
-
-Elastic Observability · New Relic SRE Agent and Autopilot · Dynatrace Root Cause Analysis · Meta Engineering DrP · OpenTelemetry · Prometheus · Grafana Loki · FastAPI · PostgreSQL · Redis · Locust · Grafana k6 · DoWhy · AgentRCA preprint · Incident-Arena (verify exact title, authors and version before citing).
-
-## License
-
-To be decided.
+The original plan, with its roadmap and acceptance checklist: [docs/blueprint.md](docs/blueprint.md).

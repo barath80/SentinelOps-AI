@@ -9,6 +9,9 @@ RUN grep -v '^pytest' requirements.txt > runtime-requirements.txt \
  && pip install --no-cache-dir -r runtime-requirements.txt
 
 COPY app ./app
+# The research model's metadata (results, calibration) shown on the dashboard's ML model page;
+# the large .joblib artifacts stay out of the image.
+COPY models/root_cause_v2.json ./models/
 
 RUN useradd --system --uid 10001 sentinel
 USER sentinel

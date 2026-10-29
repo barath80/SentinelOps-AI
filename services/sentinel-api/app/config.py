@@ -62,6 +62,15 @@ class Settings(BaseSettings):
     bootstrap_admin: str = ""
     # Base URL of this deployment, used for links in notifications (e.g. https://sentinel.example).
     public_url: str = ""
+    # The monitored application (the ShopSphere demo store): the dashboard links to it so operators
+    # can open the live shop next to its incidents. Only http(s) URLs: it becomes a link's href.
+    shop_url: str = ""
+    @field_validator("shop_url")
+    @classmethod
+    def _http_url(cls, url: str) -> str:
+        if url and not (url.startswith("https://") or url.startswith("http://")):
+            raise ValueError("shop_url must start with https:// or http://")
+        return url.rstrip("/")
     # Webhooks must be public https URLs. Only for local tests: allow private addresses and http.
     notify_allow_private: bool = False
     notify_interval_seconds: float = 5.0

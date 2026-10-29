@@ -162,7 +162,7 @@ def test_without_a_session_secret_nobody_can_log_in(tmp_path):
     client = TestClient(create_app(Settings(database_url=f"sqlite:///{tmp_path / 'n.db'}", ingest_token="machine-token",
                                             bootstrap_admin="root:root-password-123")))
     assert client.post("/api/v1/auth/login", json={"username": "root", "password": "root-password-123"}).status_code == 503
-    assert client.get("/api/v1/auth/mode").json() == {"mode": "operators", "login_configured": False}
+    assert client.get("/api/v1/auth/mode").json() == {"mode": "operators", "login_configured": False, "shop_url": None}
 
 
 def test_bootstrap_admin_is_only_used_while_no_operator_exists(tmp_path):
@@ -210,3 +210,12 @@ def test_a_lockout_from_one_address_does_not_lock_the_operator_out_elsewhere(tmp
 def test_a_non_ascii_token_is_a_401_not_a_server_error(api):
     res = api.get("/api/v1/incidents", headers={"Authorization": "Bearer tokén".encode("latin-1")})
     assert res.status_code == 401
+
+
+def test_the_shop_link_is_published_and_only_ever_an_http_url(tmp_path):
+    import pytest
+    from pydantic import ValidationError
+    s = Settings(database_url=f"sqlite:///{tmp_path / 's.db'}", ingest_token="m", shop_url="https://shop.example/")
+    assert TestClient(create_app(s)).get("/api/v1/auth/mode").json()["shop_url"] == "https://shop.example"
+    with pytest.raises(ValidationError):
+        Settings(shop_url="javascript:alert(1)")

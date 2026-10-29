@@ -46,4 +46,6 @@ Status: **deployed** on Render (https://sentinelops-ai-lukk.onrender.com) with N
 - **Set `SENTINEL_TRUSTED_PROXY_HOPS=1` on Render** (the blueprint does): rate limits and the sign-in lockout then use the client address Render's proxy saw. Without it every request shares the proxy's address.
 - **Rate limits** are per instance and in memory (600 requests per minute per credential, 30 sign-ins per minute per address, 6000 ingest calls per minute). Behind several instances the effective limit multiplies.
 - **Notifications**: set `SENTINEL_PUBLIC_URL=https://<service>.onrender.com` so messages link to the dashboard. Add channels in the dashboard (Notifications, admin only).
+- **Shop link**: set `SENTINEL_SHOP_URL=https://shopsphere-demo-beta.vercel.app` (the blueprint does) and every operator gets a
+  "ShopSphere store" link in the dashboard sidebar. Only `http(s)` URLs are accepted.
 - **Automation is off** until an admin switches it on and sets a per-cause policy. Set `SENTINEL_AUTOMATION_ALLOWED=false` to make that impossible on a deployment.

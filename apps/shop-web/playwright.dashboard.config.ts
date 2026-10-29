@@ -25,6 +25,7 @@ export default defineConfig({
       SENTINEL_SESSION_SECRET: "e2e-session-secret-0123456789abcdef0123",
       SENTINEL_BOOTSTRAP_ADMIN: "admin:e2e-admin-password",
       SENTINEL_EXECUTOR: "mock",
+      SENTINEL_SHOP_URL: "https://shop.example",
       SENTINEL_NOTIFY_ALLOW_PRIVATE: "true", // the test channel points at 127.0.0.1
     },
   },

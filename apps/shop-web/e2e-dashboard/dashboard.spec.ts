@@ -41,6 +41,10 @@ async function signIn(page: Page, username: string, password = `${username}-pass
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.locator("#whoami")).toContainText(`Signed in as ${username}`);
+  // every operator can open the monitored shop from the sidebar, in a new tab
+  const shop = page.getByRole("link", { name: /ShopSphere store/ });
+  await expect(shop).toHaveAttribute("href", "https://shop.example");
+  await expect(shop).toHaveAttribute("target", "_blank");
 }
 
 function watchErrors(page: Page): string[] {

@@ -293,7 +293,8 @@ function renderNav() {
     return h("button", { type: "button", class: "nav-item", "aria-current": current ? "page" : null,
       onclick: () => { go(`#/${n.id}`); $("#sidebar").classList.remove("open"); } }, n.label,
       count ? h("span", { class: "nav-count", "aria-label": `${count} open` }, count) : null);
-  }));
+  }), ...(state.shopUrl ? [h("a", { class: "nav-item nav-external", href: state.shopUrl, target: "_blank", rel: "noopener noreferrer",
+    title: "The monitored application, in a new tab" }, "ShopSphere store", h("span", { "aria-hidden": "true" }, "↗"))] : []));
 }
 function renderSignals(o) {
   const items = [];
@@ -866,6 +867,7 @@ window.addEventListener("hashchange", () => { state.signature = ""; render(true)
 applyTheme(store.pref("theme"));
 fetch("/api/v1/auth/mode").then((r) => r.json()).then((m) => {
   state.mode = m.mode;
+  state.shopUrl = /^https?:\/\//.test(m.shop_url || "") ? m.shop_url : null;  // only ever an http(s) link
   showShell();
   if (m.mode === "operators" && !m.login_configured) $("#login-status").textContent = "Sign-in is not configured on this server (SENTINEL_SESSION_SECRET is unset).";
   if (state.token) render(true).then(schedule);

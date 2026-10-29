@@ -27,6 +27,8 @@ jobs:
         run: python -m benchmark --seeds 1 --systems alert_correlator sentinel_full > /dev/null
       - name: Container builds
         run: docker build -t sentinelops-api .
+      - name: Container ships the serving model and the research model's metadata
+        run: docker run --rm sentinelops-api python -c "from app.analysis import learned; from app.overview import MODEL_META; assert learned.load() and MODEL_META.exists(), 'model files missing from the image'"
 
   shop-web:
     runs-on: ubuntu-latest

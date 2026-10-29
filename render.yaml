@@ -23,3 +23,5 @@ services:
         value: "1"
       - key: SENTINEL_PUBLIC_URL     # links in team notifications point at the dashboard
         value: https://sentinelops-ai-lukk.onrender.com
+      - key: SENTINEL_SHOP_URL       # the monitored ShopSphere store; the dashboard sidebar links to it
+        value: https://shopsphere-demo-beta.vercel.app

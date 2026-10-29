@@ -263,7 +263,7 @@ class Auth:
 
         @app.get("/api/v1/auth/mode")
         def mode() -> dict:
-            return {"mode": settings.auth_mode, "login_configured": bool(settings.session_secret)}
+            return {"mode": settings.auth_mode, "login_configured": bool(settings.session_secret), "shop_url": settings.shop_url or None}
 
         @app.post("/api/v1/auth/login")
         def login(body: Login, request: Request) -> dict:
