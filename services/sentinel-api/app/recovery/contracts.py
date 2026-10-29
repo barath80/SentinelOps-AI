@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from ..analysis.detect import samples_from_rows
 from ..db import (ActionRunRow, ApprovalRow, ContractRow, EventRow, HypothesisRow, IncidentRow, RehearsalRow,
                   RollbackRunRow, TransitionRow, VerificationRow)
+from .. import notify
 from . import rehearsal, slo
 from .executors import ActionResult, Executor
 from .policy import CATALOGUE, POLICY_VERSION, RECOMMENDED_ACTION, evaluate
@@ -64,10 +65,21 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+# Which state changes the team is told about (see app/notify.py).
+EVENT_FOR_STATE = {"AWAITING_APPROVAL": "approval.needed", "BLOCKED": "action.blocked", "SUCCEEDED": "recovery.succeeded",
+                   "FAILED": "recovery.failed", "INCONCLUSIVE": "recovery.failed", "ROLLED_BACK": "rollback.done",
+                   "ROLLBACK_FAILED": "rollback.failed"}
+
+
 def _record(session: Session, row: ContractRow, from_state: str | None, to_state: str, actor: str,
             note: str = "", details: dict | None = None) -> None:
     session.add(TransitionRow(id=str(uuid.uuid4()), contract_id=row.id, from_state=from_state, to_state=to_state,
                               actor=actor, policy_version=POLICY_VERSION, note=note, details=details or {}, at=_now()))
+    event = EVENT_FOR_STATE.get(to_state)
+    inc = session.get(IncidentRow, row.incident_id) if event else None
+    if inc is not None:  # queued in this transaction: sent only if the change commits
+        notify.dispatch(session, event, {**notify.incident_payload(session, inc, notify.PUBLIC_URL), "action": row.action_template,
+                                         "state": to_state, "reason": note, "contract_id": row.id, "actor": actor})
 
 
 def transition(session: Session, row: ContractRow, to: str, actor: str, note: str = "", details: dict | None = None) -> None:

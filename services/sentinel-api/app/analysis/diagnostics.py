@@ -362,6 +362,11 @@ def rescore(session: Session, incident: IncidentRow, reason: str) -> None:
         if (r.score, r.status) != (h.score, h.status):
             r.score_history = [*(r.score_history or []), {"at": now, "score": r.score, "status": r.status, "reason": reason}]
         r.score, r.status, r.breakdown = h.score, h.status, h.breakdown
+    if assessment == "leading_hypothesis" and incident.assessment != "leading_hypothesis":
+        from .. import notify  # imported here: notify imports db models that import nothing from analysis
+        notify.dispatch(session, "incident.diagnosed",
+                        {**notify.incident_payload(session, incident, notify.PUBLIC_URL), "dedupe_key": incident.id},
+                        dedupe_seconds=10 * 365 * 86400)  # re-analysis re-derives it; the team hears it once
     incident.assessment = assessment
 
 

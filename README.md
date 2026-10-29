@@ -28,7 +28,11 @@ SentinelOps AI is an AI-assisted reliability operations platform for cloud appli
 | Operator sign-in with roles (viewer, responder, approver, admin); machine token limited to ingest and analysis | `app/auth.py` |
 | Incident-to-prevention compiler with human review | `app/prevention.py` |
 | Learned root-cause model: notebook, model card, shadow mode in the API, incident labels | [notebook](services/sentinel-api/notebooks/root_cause_model.ipynb), [model card](services/sentinel-api/models/MODEL_CARD.md) |
-| Dashboard with sign-in | `app/ui/` |
+| Dashboard: overview, incident pages with evidence, logs, traces, metrics and the model's explanation, telemetry explorer, light/dark, phone layout | `app/ui/` |
+| Team notifications (Slack and signed webhooks) with evidence and links, outbox with retries, SSRF-safe URLs | `app/notify.py` |
+| Automatic remediation, opt-in per cause (propose or auto, rehearsal-gated, hourly cap, auto-rollback), alongside the manual path | `app/automation.py` |
+| Throttling (429) detection, API rate limits, security headers, central audit log | `app/analysis/throttle.py`, `app/ratelimit.py`, `app/audit.py` |
+| Incident timeline, similar past incidents (and what fixed them), postmortem drafts, SLOs with error-budget burn alerts, release markers on charts | `app/insights.py` |
 | Benchmark against baselines (simulated) | [docs/benchmark-results.md](docs/benchmark-results.md) |
 | Labelled-incident campaign and evaluation on the live system; end-to-end run of every new scenario, recovery and rollback on the real application | [docs/real-incidents.md](docs/real-incidents.md) |
 | Browser tests: shop checkout journey, dashboard sign-in, roles, four-eyes approval and execution | `apps/shop-web/e2e/`, `apps/shop-web/e2e-dashboard/` |

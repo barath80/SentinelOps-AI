@@ -1,7 +1,27 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.types import TypeDecorator
+
+
+class UTCDateTime(TypeDecorator):
+    """Timestamps are always UTC and always come back timezone-aware. SQLite stores them without a
+    zone, so without this an API response carried a bare "07:57" that browsers read as local time."""
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        # naive means UTC; an aware value in another zone is converted, never just relabelled
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+    def process_result_value(self, value, dialect):
+        if value is not None and value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value
 
 
 class Base(DeclarativeBase):
@@ -17,8 +37,8 @@ class EventRow(Base):
     environment: Mapped[str] = mapped_column(String(20))
     service_name: Mapped[str] = mapped_column(String(100))
     event_type: Mapped[str] = mapped_column(String(20))
-    event_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    ingest_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    event_time: Mapped[datetime] = mapped_column(UTCDateTime())
+    ingest_time: Mapped[datetime] = mapped_column(UTCDateTime())
     trace_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     request_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     severity: Mapped[str | None] = mapped_column(String(10), nullable=True)
@@ -43,8 +63,8 @@ class IncidentRow(Base):
     status: Mapped[str] = mapped_column(String(20), default="open")
     # leading_hypothesis | inconclusive: the engine abstains rather than force a winner.
     assessment: Mapped[str] = mapped_column(String(30))
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    detected_at: Mapped[datetime] = mapped_column(UTCDateTime())
     routes: Mapped[list] = mapped_column(JSON)
     summary: Mapped[dict] = mapped_column(JSON)
 
@@ -96,7 +116,7 @@ class DiagnosticRunRow(Base):
     details: Mapped[dict] = mapped_column(JSON)
     source_refs: Mapped[list] = mapped_column(JSON)
     duration_ms: Mapped[int] = mapped_column()
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime())
 
     __table_args__ = (Index("ux_diag_incident_test", "incident_id", "test_id", unique=True),)
 
@@ -113,7 +133,7 @@ class ContractRow(Base):
     outcome: Mapped[str] = mapped_column(String(14), default="pending")  # pending|pass|fail|inconclusive
     proposed_by: Mapped[str] = mapped_column(String(100))
     contract: Mapped[dict] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime())
 
 
 class TransitionRow(Base):
@@ -129,7 +149,7 @@ class TransitionRow(Base):
     policy_version: Mapped[str] = mapped_column(String(20))
     note: Mapped[str] = mapped_column(Text, default="")
     details: Mapped[dict] = mapped_column(JSON, default=dict)
-    at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    at: Mapped[datetime] = mapped_column(UTCDateTime())
 
 
 class ApprovalRow(Base):
@@ -140,7 +160,7 @@ class ApprovalRow(Base):
     reviewer: Mapped[str] = mapped_column(String(100))
     decision: Mapped[str] = mapped_column(String(10))  # approve | reject
     comment: Mapped[str] = mapped_column(Text, default="")
-    at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    at: Mapped[datetime] = mapped_column(UTCDateTime())
 
 
 class ActionRunRow(Base):
@@ -151,8 +171,8 @@ class ActionRunRow(Base):
     contract_id: Mapped[str] = mapped_column(ForeignKey("recovery_contracts.id", ondelete="CASCADE"), unique=True)
     action_template: Mapped[str] = mapped_column(String(60))
     executor: Mapped[str] = mapped_column(String(30))
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     status: Mapped[str] = mapped_column(String(14))  # succeeded | failed
     output: Mapped[dict] = mapped_column(JSON)
 
@@ -169,7 +189,7 @@ class RehearsalRow(Base):
     reason: Mapped[str] = mapped_column(Text)
     details: Mapped[dict] = mapped_column(JSON)
     requested_by: Mapped[str] = mapped_column(String(100))
-    at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    at: Mapped[datetime] = mapped_column(UTCDateTime())
 
 
 class RollbackRunRow(Base):
@@ -182,8 +202,8 @@ class RollbackRunRow(Base):
     executor: Mapped[str] = mapped_column(String(30))
     requested_by: Mapped[str] = mapped_column(String(100))
     reason: Mapped[str] = mapped_column(Text, default="")
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     status: Mapped[str] = mapped_column(String(14))  # running | succeeded | failed
     output: Mapped[dict] = mapped_column(JSON)
 
@@ -193,9 +213,9 @@ class VerificationRow(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     contract_id: Mapped[str] = mapped_column(ForeignKey("recovery_contracts.id", ondelete="CASCADE"), index=True)
-    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    window_start: Mapped[datetime] = mapped_column(UTCDateTime())
+    window_end: Mapped[datetime] = mapped_column(UTCDateTime())
+    evaluated_at: Mapped[datetime] = mapped_column(UTCDateTime())
     outcome: Mapped[str] = mapped_column(String(14))  # pass | fail | inconclusive | pending
     reason: Mapped[str] = mapped_column(Text)
     predicates: Mapped[list] = mapped_column(JSON)
@@ -210,7 +230,7 @@ class IncidentLabelRow(Base):
     label: Mapped[str] = mapped_column(String(40))
     labeled_by: Mapped[str] = mapped_column(String(100))
     note: Mapped[str] = mapped_column(Text, default="")
-    labeled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    labeled_at: Mapped[datetime] = mapped_column(UTCDateTime())
 
 
 class OperatorRow(Base):
@@ -223,10 +243,10 @@ class OperatorRow(Base):
     role: Mapped[str] = mapped_column(String(12))  # viewer | responder | approver | admin
     disabled: Mapped[bool] = mapped_column(default=False)
     created_by: Mapped[str] = mapped_column(String(100))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime())
     # Sessions issued before this moment are invalid (logout, password change, disabling).
-    sessions_valid_after: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sessions_valid_after: Mapped[datetime] = mapped_column(UTCDateTime())
+    last_login_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
 
 class PreventionArtifactRow(Base):
@@ -248,7 +268,7 @@ class PreventionArtifactRow(Base):
     review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     checks: Mapped[list] = mapped_column(JSON)
     checks_passed: Mapped[bool] = mapped_column()
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime())
 
 
 def make_session_factory(url: str, create_schema: bool = True) -> sessionmaker:
@@ -257,3 +277,72 @@ def make_session_factory(url: str, create_schema: bool = True) -> sessionmaker:
     if create_schema:
         Base.metadata.create_all(engine)
     return sessionmaker(engine, expire_on_commit=False)
+
+
+class AuditRow(Base):
+    """Append-only record of security-relevant changes (operators, channels, policies, automation)."""
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    at: Mapped[datetime] = mapped_column(UTCDateTime(), index=True)
+    actor: Mapped[str] = mapped_column(String(100))
+    action: Mapped[str] = mapped_column(String(60))
+    target: Mapped[str] = mapped_column(String(200), default="")
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class NotificationChannelRow(Base):
+    __tablename__ = "notification_channels"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    kind: Mapped[str] = mapped_column(String(12))  # slack | webhook
+    url: Mapped[str] = mapped_column(Text)  # never returned by the API, only its host
+    signing_secret: Mapped[str] = mapped_column(String(100))  # HMAC key for X-SentinelOps-Signature
+    events: Mapped[list] = mapped_column(JSON)  # event types delivered to this channel
+    enabled: Mapped[bool] = mapped_column(default=True)
+    created_by: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime())
+
+
+class NotificationRow(Base):
+    """Outbox: written in the same transaction as the change it reports, sent afterwards."""
+
+    __tablename__ = "notifications"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    channel_id: Mapped[str] = mapped_column(ForeignKey("notification_channels.id", ondelete="CASCADE"), index=True)
+    event: Mapped[str] = mapped_column(String(40))
+    payload: Mapped[dict] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(10), default="pending")  # pending | sent | failed
+    attempts: Mapped[int] = mapped_column(default=0)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), index=True)
+    next_attempt_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+
+
+class AutomationPolicyRow(Base):
+    """How much SentinelOps may do on its own for one cause. The default for every cause is manual."""
+
+    __tablename__ = "automation_policies"
+
+    cause_key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    mode: Mapped[str] = mapped_column(String(10))  # manual | propose | auto
+    auto_rollback: Mapped[bool] = mapped_column(default=True)
+    max_risk: Mapped[str] = mapped_column(String(10), default="low")  # low | medium
+    updated_by: Mapped[str] = mapped_column(String(100))
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime())
+
+
+class AutomationRunRow(Base):
+    __tablename__ = "automation_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    at: Mapped[datetime] = mapped_column(UTCDateTime(), index=True)
+    incident_id: Mapped[str] = mapped_column(String(36), index=True)
+    contract_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    step: Mapped[str] = mapped_column(String(20))  # propose | execute | verify | rollback | skip
+    outcome: Mapped[str] = mapped_column(String(40))
+    reason: Mapped[str] = mapped_column(Text, default="")

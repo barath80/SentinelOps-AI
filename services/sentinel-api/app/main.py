@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from sqlalchemy.dialects import postgresql, sqlite
 
 from .adapters import ADAPTERS
 from .config import Settings, get_settings
-from . import auth as auth_mod, maintenance, prevention
+from . import audit, auth as auth_mod, automation, insights, maintenance, notify, overview, prevention, ratelimit, telemetry_api
 from .analysis import quality
 from .analysis.diagnostics import TESTS, investigate, investigated_answer, run_test
 from .analysis.service import analyze
@@ -29,14 +30,23 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
     sessions = make_session_factory(settings.database_url, settings.auto_create_schema)
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        task = None
+        tasks = [asyncio.create_task(notify_loop())]  # delivers queued team notifications
         if settings.analyze_interval_seconds > 0:  # off by default; serverless hosts should not enable it
-            task = asyncio.create_task(maintenance.run_forever(sessions, settings))
+            tasks.append(asyncio.create_task(maintenance.run_forever(sessions, settings, executor=executor)))
         yield
-        if task:
+        for task in tasks:
             task.cancel()
 
-    app = FastAPI(title="SentinelOps API", version="0.2.0", lifespan=lifespan)
+    async def notify_loop():
+        while True:
+            await asyncio.sleep(settings.notify_interval_seconds)
+            try:
+                await asyncio.to_thread(notify.flush, sessions, settings.notify_allow_private, settings.notify_allow_private)
+            except Exception:  # noqa: BLE001 - delivery problems are recorded per row; the loop must survive
+                logging.getLogger("sentinelops.notify").exception("notification flush failed")
+
+    app = FastAPI(title="SentinelOps API", version="0.3.0", lifespan=lifespan)
+    app.state.sessions, app.state.settings = sessions, settings
     # Fails closed: no ingest token means no machine access, no session secret means no logins.
     auth = auth_mod.Auth(settings, sessions)
     auth_mod.bootstrap(sessions, settings)
@@ -250,15 +260,32 @@ def create_app(settings: Settings | None = None, executor: Executor | None = Non
     if executor is None:
         executor = (ShopAdminExecutor(settings.shop_admin_url, settings.shop_admin_token)
                     if settings.executor == "shop_admin" else MockExecutor())
+    app.state.executor = executor
     recovery_api.register(app, settings, sessions, auth, executor)
     prevention.register(app, settings.default_tenant_id, sessions, auth)
+    notify.PUBLIC_URL = settings.public_url
+    telemetry_api.register(app, settings.default_tenant_id, sessions, auth)
+    audit.register(app, settings.default_tenant_id, sessions, auth)
+    notify.register(app, settings, sessions, auth)
+    automation.register(app, settings, sessions, auth, executor)
+    overview.register(app, settings, sessions, auth)
+    insights.register(app, settings.default_tenant_id, sessions, auth)
 
     # Dashboard: static files served same-origin. The CSP forbids inline script and any outside host.
     app.mount("/ui", StaticFiles(directory=Path(__file__).parent / "ui", html=True), name="ui")
 
+    app.middleware("http")(ratelimit.middleware(settings))
+
     @app.middleware("http")
     async def ui_security_headers(request: Request, call_next):
         response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        if request.url.path.startswith("/api"):
+            response.headers["Cache-Control"] = "no-store"
         if request.url.path.startswith("/ui"):
             response.headers["Content-Security-Policy"] = (
                 "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "

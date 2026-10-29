@@ -7,32 +7,57 @@
   <link rel="stylesheet" href="/ui/style.css">
 </head>
 <body>
-  <header class="bar">
-    <h1>SentinelOps AI</h1>
-    <form id="login" class="connect" hidden>
-      <label>Username <input id="username" type="text" autocomplete="username" maxlength="100" required></label>
-      <label>Password <input id="password" type="password" autocomplete="current-password" maxlength="200" required></label>
+  <!-- Signed out: a sign-in card (or, in legacy shared-token mode, a token form). -->
+  <div id="signed-out" class="login-wrap" hidden>
+    <form id="login" class="card login" hidden>
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>SentinelOps AI</span></div>
+      <p class="muted">Evidence-driven incident investigation and controlled recovery.</p>
+      <label class="field">Username <input id="username" type="text" autocomplete="username" maxlength="100" required></label>
+      <label class="field">Password <input id="password" type="password" autocomplete="current-password" maxlength="200" required></label>
       <button type="submit">Sign in</button>
+      <p id="login-status" class="status-line" role="status"></p>
     </form>
-    <form id="connect" class="connect" hidden>
-      <label>API token <input id="token" type="password" autocomplete="off" placeholder="bearer token"></label>
-      <label>Your name <input id="actor" type="text" autocomplete="off" placeholder="e.g. alice" maxlength="100"></label>
+    <form id="connect" class="card login" hidden>
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>SentinelOps AI</span></div>
+      <p class="banner">Development mode (shared token): the name below is not verified.</p>
+      <label class="field">API token <input id="token" type="password" autocomplete="off"></label>
+      <label class="field">Your name <input id="actor" type="text" autocomplete="off" maxlength="100"></label>
       <button type="submit">Connect</button>
-      <span class="note">Legacy shared-token mode: the name is not verified.</span>
     </form>
-    <div id="session" class="connect" hidden>
-      <span id="whoami" class="note"></span>
-      <button type="button" id="analyze" disabled>Analyze now</button>
-      <label class="inline"><input id="auto" type="checkbox" checked> auto-refresh</label>
-      <button type="button" id="logout" class="secondary">Sign out</button>
+  </div>
+
+  <div id="app" class="shell" hidden>
+    <nav id="sidebar" class="sidebar" aria-label="Main">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>SentinelOps AI</span></div>
+      <div id="nav"></div>
+      <div class="sidebar-foot">
+        <span id="whoami"></span>
+        <div class="row">
+          <button type="button" id="theme" class="secondary small" aria-label="Switch colour theme">Theme</button>
+          <button type="button" id="logout" class="secondary small">Sign out</button>
+        </div>
+      </div>
+    </nav>
+    <div class="main">
+      <header class="topbar">
+        <button type="button" id="menu" class="secondary small menu-toggle" aria-label="Open navigation">Menu</button>
+        <h1 id="page-title">Overview</h1>
+        <span id="signals" class="row"></span>
+        <span class="spacer"></span>
+        <label class="check"><input id="auto" type="checkbox" checked> Live</label>
+        <button type="button" id="analyze" class="secondary">Analyze now</button>
+      </header>
+      <main id="view" class="content" aria-live="polite"></main>
     </div>
-  </header>
-  <p id="status" role="status" class="status"></p>
-  <p id="quality" class="banner" hidden></p>
-  <main class="layout">
-    <nav id="list" aria-label="Incidents"><p class="muted">Sign in to see incidents.</p></nav>
-    <section id="detail" aria-live="polite"><p class="muted">Select an incident.</p></section>
-  </main>
+  </div>
+
+  <aside id="drawer" class="drawer" hidden aria-label="Details">
+    <div class="drawer-head"><strong id="drawer-title"></strong><span class="spacer"></span>
+      <button type="button" id="drawer-close" class="secondary small">Close</button></div>
+    <div id="drawer-body" class="drawer-body"></div>
+  </aside>
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+  <p id="status" class="status-line" hidden></p>
   <script src="/ui/app.js"></script>
 </body>
 </html>

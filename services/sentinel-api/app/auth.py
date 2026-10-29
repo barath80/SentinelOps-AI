@@ -29,6 +29,8 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from . import audit
+from .clientaddr import client_address
 from .config import Settings
 from .db import OperatorRow
 
@@ -272,18 +274,23 @@ class Auth:
             username = body.username.strip().lower()
             # Keyed on the username AND the client address: guessing from one address is throttled,
             # but a stranger elsewhere cannot lock a real operator out by failing on purpose.
-            key = f"{username}|{request.client.host if request.client else '-'}"
+            key = f"{username}|{client_address(request, settings.trusted_proxy_hops)}"
             if self.lockout.locked(key):
                 raise HTTPException(status_code=429, detail="too_many_failed_logins")
             with sessions.begin() as s:
                 op = s.get(OperatorRow, username)
                 ok = check_password(body.password, op.password_hash if op else _DUMMY_HASH) and op is not None and not op.disabled
-                if not ok:
-                    self.lockout.fail(key)
-                    raise HTTPException(status_code=401, detail="invalid_credentials")
-                self.lockout.clear(key)
-                op.last_login_at = datetime.now(timezone.utc)
-                role = op.role
+                if ok:
+                    self.lockout.clear(key)
+                    op.last_login_at = datetime.now(timezone.utc)
+                    role = op.role
+                    audit.record(s, username, "auth.login", "", {"address": key.split("|", 1)[1]})
+            if not ok:
+                self.lockout.fail(key)
+                with sessions.begin() as s:  # its own transaction: the 401 must not roll it back
+                    audit.record(s, username[:100], "auth.login_failed", "", {"address": key.split("|", 1)[1],
+                                                                              "locked_now": self.lockout.locked(key)})
+                raise HTTPException(status_code=401, detail="invalid_credentials")
             now = time.time()
             # iat is kept to the microsecond so a session issued just after a revocation stays valid
             claims = {"sub": username, "iat": now, "exp": now + settings.session_ttl_seconds, "sid": secrets.token_hex(8)}
@@ -331,6 +338,7 @@ class Auth:
             with sessions.begin() as s:
                 if s.get(OperatorRow, body.username):
                     raise HTTPException(status_code=409, detail="operator_exists")
+                audit.record(s, p.name or "admin", "operator.created", body.username, {"role": body.role})
                 return view(create_operator(s, body.username, body.password, body.role, p.name or "admin"))
 
         @app.patch("/api/v1/operators/{username}")
@@ -347,4 +355,5 @@ class Auth:
                     op.disabled = body.disabled
                     if body.disabled:
                         op.sessions_valid_after = datetime.now(timezone.utc)
+                audit.record(s, p.name, "operator.changed", username, body.model_dump(exclude_none=True))
                 return view(op)

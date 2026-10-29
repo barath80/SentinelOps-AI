@@ -1,7 +1,8 @@
 """Background upkeep: periodic analysis and data retention.
 
-Safety: the scheduler only analyzes and (optionally) runs read-only diagnostics. It never proposes,
-approves or executes a recovery action. Retention never deletes an event that an incident's
+Safety: the scheduler analyzes, (optionally) runs read-only diagnostics and closes verification
+windows that have ended. It proposes, approves or executes a recovery action only through
+app/automation.py, and only for causes an admin has put in `propose` or `auto` mode. Retention never deletes an event that an incident's
 evidence or a diagnostic run cites, so every ledger claim keeps resolving to its source.
 """
 from __future__ import annotations
@@ -55,10 +56,11 @@ def purge_events(session: Session, tenant_id: str, older_than: datetime, max_bat
     return {"deleted": deleted, "kept_because_cited": kept, "older_than": older_than.isoformat()}
 
 
-def tick(sessions: sessionmaker, settings: Settings, now: datetime | None = None, *, purge: bool = False) -> dict:
+def tick(sessions: sessionmaker, settings: Settings, now: datetime | None = None, *, purge: bool = False,
+         executor=None) -> dict:
     """One maintenance pass. Returns what it did (used by the scheduler and by tests)."""
     now = now or datetime.now(timezone.utc)
-    out: dict = {"analyzed": 0, "investigated": 0, "purged": None}
+    out: dict = {"analyzed": 0, "investigated": 0, "purged": None, "automation": []}
     with sessions.begin() as s:
         ids = analyze(s, settings.default_tenant_id, now, settings.analysis_window_seconds, shadow=settings.shadow_model)
         out["analyzed"] = len(ids)
@@ -69,13 +71,16 @@ def tick(sessions: sessionmaker, settings: Settings, now: datetime | None = None
                 if inc and inc.status == "open" and not has_runs:
                     investigate(s, inc, budget=4)
                     out["investigated"] += 1
+    if executor is not None:  # closes due verifications; acts only where an admin enabled automation
+        from . import automation
+        out["automation"] = automation.run(sessions, settings, executor, now)
     if purge and settings.retention_days > 0:
         with sessions.begin() as s:
             out["purged"] = purge_events(s, settings.default_tenant_id, now - timedelta(days=settings.retention_days))
     return out
 
 
-async def run_forever(sessions: sessionmaker, settings: Settings, interval: float | None = None) -> None:
+async def run_forever(sessions: sessionmaker, settings: Settings, interval: float | None = None, executor=None) -> None:
     """Loop until cancelled. A failed pass is logged and the loop carries on."""
     interval = interval if interval is not None else settings.analyze_interval_seconds
     last_purge = datetime.now(timezone.utc) - timedelta(seconds=settings.purge_interval_seconds)
@@ -83,7 +88,7 @@ async def run_forever(sessions: sessionmaker, settings: Settings, interval: floa
         await asyncio.sleep(interval)
         due = (datetime.now(timezone.utc) - last_purge).total_seconds() >= settings.purge_interval_seconds
         try:
-            result = await asyncio.to_thread(tick, sessions, settings, None, purge=due)
+            result = await asyncio.to_thread(tick, sessions, settings, None, purge=due, executor=executor)
             if due:
                 last_purge = datetime.now(timezone.utc)
             log.info("maintenance pass: %s", result)

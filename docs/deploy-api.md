@@ -8,7 +8,8 @@ Status: **deployed** on Render (https://sentinelops-ai-lukk.onrender.com) with N
 1. **Database.** Use a Postgres connection string (for example a Neon branch or database separate from the shop's). The API creates
    its own tables on first start (`events`, `incidents`, `hypotheses`, `evidence`, `diagnostic_runs`, `recovery_contracts`,
    `contract_transitions`, `approvals`, `action_runs`, `verification_runs`, `rehearsal_runs`, `rollback_runs`, `operators`,
-   `incident_labels`, `prevention_artifacts`). New tables are added to an existing database on the next start. It never
+   `incident_labels`, `prevention_artifacts`, `audit_log`, `notification_channels`, `notifications`, `automation_policies`,
+   `automation_runs`). New tables are added to an existing database on the next start. It never
    touches the shop's `orders` table.
 2. **Create the service.** In Render choose New > Blueprint, select this repository, and apply `render.yaml`. Set:
    - `SENTINEL_DATABASE_URL`: the Postgres URL (`postgresql://` or `postgres://` both work).
@@ -38,8 +39,11 @@ Status: **deployed** on Render (https://sentinelops-ai-lukk.onrender.com) with N
   every session of that operator at once. Five failed sign-ins lock a username from that client address for 15 minutes, counted per instance.
 - **One tenant.** All operators see all incidents. There is no single sign-on (OIDC) yet: accounts are local to SentinelOps.
 - **Upgrading from the shared-token version:** the default `SENTINEL_AUTH_MODE=operators` turns the old "token + your name" login
-  off. Set `SENTINEL_BOOTSTRAP_ADMIN` before deploying, The old shared-token behaviour cannot be used on Render: it starts only
+  off. Set `SENTINEL_BOOTSTRAP_ADMIN` before deploying. The old shared-token behaviour cannot be used on Render: it starts only
   with `SENTINEL_ALLOW_INSECURE_SHARED_TOKEN=true` and never when `RENDER` is set.
 - **Executor is `mock`.** Approving and "executing" only records the action. `shop_admin` needs `SENTINEL_SHOP_ADMIN_URL` and
   `SENTINEL_SHOP_ADMIN_TOKEN` and changes the demo shop's fault state, so use it only against a demo shop.
-- **No rate limiting** on the API apart from the sign-in lockout.
+- **Set `SENTINEL_TRUSTED_PROXY_HOPS=1` on Render** (the blueprint does): rate limits and the sign-in lockout then use the client address Render's proxy saw. Without it every request shares the proxy's address.
+- **Rate limits** are per instance and in memory (600 requests per minute per credential, 30 sign-ins per minute per address, 6000 ingest calls per minute). Behind several instances the effective limit multiplies.
+- **Notifications**: set `SENTINEL_PUBLIC_URL=https://<service>.onrender.com` so messages link to the dashboard. Add channels in the dashboard (Notifications, admin only).
+- **Automation is off** until an admin switches it on and sets a per-cause policy. Set `SENTINEL_AUTOMATION_ALLOWED=false` to make that impossible on a deployment.

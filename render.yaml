@@ -19,3 +19,7 @@ services:
         sync: false
       - key: SENTINEL_EXECUTOR
         value: mock
+      - key: SENTINEL_TRUSTED_PROXY_HOPS  # Render's proxy: the client address is the last X-Forwarded-For entry
+        value: "1"
+      - key: SENTINEL_PUBLIC_URL     # links in team notifications point at the dashboard
+        value: https://sentinelops-ai-lukk.onrender.com

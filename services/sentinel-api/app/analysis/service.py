@@ -8,7 +8,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..db import DiagnosticRunRow, EvidenceRow, EventRow, HypothesisRow, IncidentRow
-from . import learned, propagation, quality
+from .. import notify
+from . import learned, propagation, quality, throttle
 from .attribution import attribute
 from .ml_features import features_for_candidate, spans_by_trace
 from .diagnostics import reapply, retry_events
@@ -76,6 +77,7 @@ def analyze(session: Session, tenant_id: str, as_of: datetime, window_seconds: i
             prior_tests = list(session.scalars(select(DiagnosticRunRow.test_id).where(DiagnosticRunRow.incident_id == incident.id)))
             history = {h.cause_key: list(h.score_history or []) for h in session.scalars(
                 select(HypothesisRow).where(HypothesisRow.incident_id == incident.id))}
+        created = incident is None
         if incident is None:
             incident = IncidentRow(id=str(uuid.uuid4()), tenant_id=tenant_id, status="open")
             session.add(incident)
@@ -122,7 +124,20 @@ def analyze(session: Session, tenant_id: str, as_of: datetime, window_seconds: i
         session.flush()
         if prior_tests:
             reapply(session, incident, prior_tests, cfg)
+        if created:
+            notify.dispatch(session, "incident.opened", notify.incident_payload(session, incident, notify.PUBLIC_URL))
         ids.append(incident.id)
+    # Signals that are not incidents but that the team should hear about (deduplicated for 10 min).
+    for t in throttle.assess(samples, as_of)["routes"]:
+        notify.dispatch(session, "throttling.detected", {**t, "dedupe_key": t["route"]}, dedupe_seconds=600)
+    for w in data_quality["warnings"]:
+        notify.dispatch(session, "telemetry.quality", {**w, "dedupe_key": w["service"]}, dedupe_seconds=600)
+    from .. import insights  # imported here: insights reads models that import this module's package
+    for slo in insights.slos(rows, as_of):
+        if slo["fast_burn"]:
+            notify.dispatch(session, "slo.burn", {"route": slo["route"], "dedupe_key": slo["route"],
+                                                  "message": f"{slo['route']} is burning its error budget at {slo['burn_rate_1h']}x "
+                                                             f"(availability target {slo['availability_target']:.0%})"}, dedupe_seconds=3600)
     return ids
 
 

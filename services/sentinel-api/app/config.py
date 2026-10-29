@@ -60,6 +60,20 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 8 * 3600
     # "username:password" for the first admin; used only while no operator exists.
     bootstrap_admin: str = ""
+    # Base URL of this deployment, used for links in notifications (e.g. https://sentinel.example).
+    public_url: str = ""
+    # Webhooks must be public https URLs. Only for local tests: allow private addresses and http.
+    notify_allow_private: bool = False
+    notify_interval_seconds: float = 5.0
+    # Hard ceiling for automatic remediation: when false an admin cannot switch automation on.
+    automation_allowed: bool = True
+    automation_max_actions_per_hour: int = 3
+    # Requests per minute per credential (or address), for sign-in per address, and for ingest.
+    rate_limit_per_minute: int = 600
+    # Reverse proxies in front of the API whose X-Forwarded-For entry to trust (Render: 1). 0 = none.
+    trusted_proxy_hops: int = 0
+    login_rate_limit_per_minute: int = 30
+    ingest_rate_limit_per_minute: int = 6000
 
 
 def get_settings() -> Settings:

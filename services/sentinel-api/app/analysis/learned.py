@@ -35,6 +35,16 @@ class ServingModel:
         total = sum(exps)
         return {c: e / total for c, e in zip(self.classes, exps)}
 
+    def explain(self, feats: dict, cls: str, top: int = 6) -> list[dict]:
+        """Why the model leans toward `cls`: each feature's contribution to that class's linear score
+        (coefficient x standardized value), largest effects first. Exact for this model, not an approximation."""
+        k = self.classes.index(cls)
+        rows = []
+        for f, m, s, w in zip(self.features, self.mean, self.scale, self.coef[k]):
+            z = (float(feats.get(f, 0.0)) - m) / s
+            rows.append({"feature": f, "value": round(float(feats.get(f, 0.0)), 4), "contribution": round(w * z, 3)})
+        return sorted(rows, key=lambda r: -abs(r["contribution"]))[:top]
+
     def predict(self, feats: dict) -> dict:
         proba = self.predict_proba(feats)
         best = max(proba, key=proba.get)
