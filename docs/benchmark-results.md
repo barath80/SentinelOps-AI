@@ -1,6 +1,6 @@
 # Benchmark results
 
-Generated 2026-10-28T16:01:19.992483+00:00 with Python 3.12.10. 20 seeds x 14 scenarios x 5 systems = 1400 runs. Rates are shown as `k/n = rate [Wilson 95% interval]`.
+Generated 2026-10-30T00:37:55.531177+00:00 with Python 3.12.10. 20 seeds x 14 scenarios x 6 systems = 1680 runs. LLM baseline model: gemini: gemini-3.5-flash-lite. Rates are shown as `k/n = rate [Wilson 95% interval]`.
 
 ## Read this first
 
@@ -12,70 +12,68 @@ Generated 2026-10-28T16:01:19.992483+00:00 with Python 3.12.10. 20 seeds x 14 sc
 - **Scenarios P1 and P2 are probes** written to exercise the falsification mechanism (a plausible leader that a direct test can disprove). They are reported separately and must not be read as a representative sample.
 - **The baselines read request logs; SentinelOps also reads traces**, as each would on the live system. Part of SentinelOps' advantage on S02, S04, S06 and S07 is that extra data, not only better reasoning.
 
-**Not run:** LLM only (ANTHROPIC_API_KEY is not set).
-
 ## Main scenarios (S00-S11)
 
-| Metric | Alert correlator | SentinelOps (no falsification) | SentinelOps (+ falsification) | SentinelOps (+ rehearsal) | SentinelOps (+ falsification + rehearsal) |
-| --- | --- | --- | --- | --- | --- |
-| **detection_recall**<br><sub>faults detected; higher is better</sub> | 200/200 = 100% [98%-100%] | 200/200 = 100% [98%-100%] | 200/200 = 100% [98%-100%] | 200/200 = 100% [98%-100%] | 200/200 = 100% [98%-100%] |
-| **false_alarm_rate**<br><sub>incidents raised on healthy traffic; lower is better</sub> | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] |
-| **top1_accuracy**<br><sub>correct cause named (determinable faults); higher is better</sub> | 60/180 = 33% [27%-41%] | 116/180 = 64% [57%-71%] | 179/180 = 99% [97%-100%] | 116/180 = 64% [57%-71%] | 179/180 = 99% [97%-100%] |
-| **complete_diagnosis_rate**<br><sub>all causes found (multi-cause faults); higher is better</sub> | 0/20 = 0% [0%-16%] | 0/20 = 0% [0%-16%] | 0/20 = 0% [0%-16%] | 0/20 = 0% [0%-16%] | 0/20 = 0% [0%-16%] |
-| **incompleteness_acknowledged_rate**<br><sub>said some symptoms are unexplained (incomplete multi-cause diagnoses); higher is better</sub> | 0/20 = 0% [0%-16%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] |
-| **false_diagnosis_rate**<br><sub>a wrong cause named (all faults); lower is better</sub> | 84/200 = 42% [35%-49%] | 40/200 = 20% [15%-26%] | 1/200 = 0% [0%-3%] | 40/200 = 20% [15%-26%] | 1/200 = 0% [0%-3%] |
-| **correct_abstention_rate**<br><sub>abstained when not determinable; higher is better</sub> | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] |
-| **wrongful_abstention_rate**<br><sub>abstained when a cause was determinable; lower is better</sub> | 36/180 = 20% [15%-26%] | 24/180 = 13% [9%-19%] | 0/180 = 0% [0%-2%] | 24/180 = 13% [9%-19%] | 0/180 = 0% [0%-2%] |
-| **incorrect_intervention_rate**<br><sub>wrong action proposed (all faults); lower is better</sub> | 84/200 = 42% [35%-49%] | 40/200 = 20% [15%-26%] | 1/200 = 0% [0%-3%] | 21/200 = 10% [7%-16%] | 0/200 = 0% [0%-2%] |
-| **false_success_rate**<br><sub>claimed recovery that did not happen (of executed actions); lower is better</sub> | 104/144 = 72% [64%-79%] | 0/156 = 0% [0%-2%] | 0/180 = 0% [0%-2%] | 0/137 = 0% [0%-3%] | 0/179 = 0% [0%-2%] |
-| **verified_recovery_rate**<br><sub>recovery truly achieved and correctly claimed; higher is better</sub> | 40/200 = 20% [15%-26%] | 96/200 = 48% [41%-55%] | 159/200 = 80% [73%-85%] | 96/200 = 48% [41%-55%] | 159/200 = 80% [73%-85%] |
-| **containment_point_accuracy**<br><sub>earliest containment point is the true origin (single-cause faults); higher is better</sub> | n/a | 157/160 = 98% [95%-99%] | 157/160 = 98% [95%-99%] | 157/160 = 98% [95%-99%] | 157/160 = 98% [95%-99%] |
-| **telemetry_issue_flagged_rate**<br><sub>data problem reported (telemetry faults); higher is better</sub> | 0/20 = 0% [0%-16%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] |
-| **spurious_telemetry_warning_rate**<br><sub>data problem reported on sound telemetry; lower is better</sub> | 0/220 = 0% [0%-2%] | 0/220 = 0% [0%-2%] | 0/220 = 0% [0%-2%] | 0/220 = 0% [0%-2%] | 0/220 = 0% [0%-2%] |
-| mean diagnostic tests run | 0.0 | 0.0 | 1.3 | 0.0 | 1.3 |
-| mean analysis time (ms) | 21 | 2583 | 2821 | 2660 | 2838 |
+| Metric | Alert correlator | LLM only | SentinelOps (no falsification) | SentinelOps (+ falsification) | SentinelOps (+ rehearsal) | SentinelOps (+ falsification + rehearsal) |
+| --- | --- | --- | --- | --- | --- | --- |
+| **detection_recall**<br><sub>faults detected; higher is better</sub> | 200/200 = 100% [98%-100%] | 187/200 = 94% [89%-96%] | 200/200 = 100% [98%-100%] | 200/200 = 100% [98%-100%] | 200/200 = 100% [98%-100%] | 200/200 = 100% [98%-100%] |
+| **false_alarm_rate**<br><sub>incidents raised on healthy traffic; lower is better</sub> | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] |
+| **top1_accuracy**<br><sub>correct cause named (determinable faults); higher is better</sub> | 60/180 = 33% [27%-41%] | 117/180 = 65% [58%-72%] | 116/180 = 64% [57%-71%] | 179/180 = 99% [97%-100%] | 116/180 = 64% [57%-71%] | 179/180 = 99% [97%-100%] |
+| **complete_diagnosis_rate**<br><sub>all causes found (multi-cause faults); higher is better</sub> | 0/20 = 0% [0%-16%] | 0/20 = 0% [0%-16%] | 0/20 = 0% [0%-16%] | 0/20 = 0% [0%-16%] | 0/20 = 0% [0%-16%] | 0/20 = 0% [0%-16%] |
+| **incompleteness_acknowledged_rate**<br><sub>said some symptoms are unexplained (incomplete multi-cause diagnoses); higher is better</sub> | 0/20 = 0% [0%-16%] | 0/20 = 0% [0%-16%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] |
+| **false_diagnosis_rate**<br><sub>a wrong cause named (all faults); lower is better</sub> | 84/200 = 42% [35%-49%] | 45/200 = 22% [17%-29%] | 40/200 = 20% [15%-26%] | 1/200 = 0% [0%-3%] | 40/200 = 20% [15%-26%] | 1/200 = 0% [0%-3%] |
+| **correct_abstention_rate**<br><sub>abstained when not determinable; higher is better</sub> | 20/20 = 100% [84%-100%] | 18/20 = 90% [70%-97%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] |
+| **wrongful_abstention_rate**<br><sub>abstained when a cause was determinable; lower is better</sub> | 36/180 = 20% [15%-26%] | 7/180 = 4% [2%-8%] | 24/180 = 13% [9%-19%] | 0/180 = 0% [0%-2%] | 24/180 = 13% [9%-19%] | 0/180 = 0% [0%-2%] |
+| **incorrect_intervention_rate**<br><sub>wrong action proposed (all faults); lower is better</sub> | 84/200 = 42% [35%-49%] | 45/200 = 22% [17%-29%] | 40/200 = 20% [15%-26%] | 1/200 = 0% [0%-3%] | 21/200 = 10% [7%-16%] | 0/200 = 0% [0%-2%] |
+| **false_success_rate**<br><sub>claimed recovery that did not happen (of executed actions); lower is better</sub> | 104/144 = 72% [64%-79%] | 65/162 = 40% [33%-48%] | 0/156 = 0% [0%-2%] | 0/180 = 0% [0%-2%] | 0/137 = 0% [0%-3%] | 0/179 = 0% [0%-2%] |
+| **verified_recovery_rate**<br><sub>recovery truly achieved and correctly claimed; higher is better</sub> | 40/200 = 20% [15%-26%] | 97/200 = 48% [42%-55%] | 96/200 = 48% [41%-55%] | 159/200 = 80% [73%-85%] | 96/200 = 48% [41%-55%] | 159/200 = 80% [73%-85%] |
+| **containment_point_accuracy**<br><sub>earliest containment point is the true origin (single-cause faults); higher is better</sub> | n/a | n/a | 157/160 = 98% [95%-99%] | 157/160 = 98% [95%-99%] | 157/160 = 98% [95%-99%] | 157/160 = 98% [95%-99%] |
+| **telemetry_issue_flagged_rate**<br><sub>data problem reported (telemetry faults); higher is better</sub> | 0/20 = 0% [0%-16%] | 0/20 = 0% [0%-16%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] | 20/20 = 100% [84%-100%] |
+| **spurious_telemetry_warning_rate**<br><sub>data problem reported on sound telemetry; lower is better</sub> | 0/220 = 0% [0%-2%] | 0/220 = 0% [0%-2%] | 0/220 = 0% [0%-2%] | 0/220 = 0% [0%-2%] | 0/220 = 0% [0%-2%] | 0/220 = 0% [0%-2%] |
+| mean diagnostic tests run | 0.0 | 0.0 | 0.0 | 1.3 | 0.0 | 1.3 |
+| mean analysis time (ms) | 17 | 32 | 1731 | 1862 | 1761 | 1908 |
 
 ## Falsification probes (P1, P2)
 
-| Metric | Alert correlator | SentinelOps (no falsification) | SentinelOps (+ falsification) | SentinelOps (+ rehearsal) | SentinelOps (+ falsification + rehearsal) |
-| --- | --- | --- | --- | --- | --- |
-| **detection_recall**<br><sub>faults detected; higher is better</sub> | 40/40 = 100% [91%-100%] | 40/40 = 100% [91%-100%] | 40/40 = 100% [91%-100%] | 40/40 = 100% [91%-100%] | 40/40 = 100% [91%-100%] |
-| **false_alarm_rate**<br><sub>incidents raised on healthy traffic; lower is better</sub> | n/a | n/a | n/a | n/a | n/a |
-| **top1_accuracy**<br><sub>correct cause named (determinable faults); higher is better</sub> | n/a | n/a | n/a | n/a | n/a |
-| **complete_diagnosis_rate**<br><sub>all causes found (multi-cause faults); higher is better</sub> | n/a | n/a | n/a | n/a | n/a |
-| **incompleteness_acknowledged_rate**<br><sub>said some symptoms are unexplained (incomplete multi-cause diagnoses); higher is better</sub> | n/a | n/a | n/a | n/a | n/a |
-| **false_diagnosis_rate**<br><sub>a wrong cause named (all faults); lower is better</sub> | 20/40 = 50% [35%-65%] | 40/40 = 100% [91%-100%] | 0/40 = 0% [0%-9%] | 40/40 = 100% [91%-100%] | 0/40 = 0% [0%-9%] |
-| **correct_abstention_rate**<br><sub>abstained when not determinable; higher is better</sub> | 20/40 = 50% [35%-65%] | 0/40 = 0% [0%-9%] | 40/40 = 100% [91%-100%] | 0/40 = 0% [0%-9%] | 40/40 = 100% [91%-100%] |
-| **wrongful_abstention_rate**<br><sub>abstained when a cause was determinable; lower is better</sub> | n/a | n/a | n/a | n/a | n/a |
-| **incorrect_intervention_rate**<br><sub>wrong action proposed (all faults); lower is better</sub> | 20/40 = 50% [35%-65%] | 40/40 = 100% [91%-100%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] |
-| **false_success_rate**<br><sub>claimed recovery that did not happen (of executed actions); lower is better</sub> | 20/20 = 100% [84%-100%] | 0/40 = 0% [0%-9%] | n/a | n/a | n/a |
-| **verified_recovery_rate**<br><sub>recovery truly achieved and correctly claimed; higher is better</sub> | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] |
-| **containment_point_accuracy**<br><sub>earliest containment point is the true origin (single-cause faults); higher is better</sub> | n/a | n/a | n/a | n/a | n/a |
-| **telemetry_issue_flagged_rate**<br><sub>data problem reported (telemetry faults); higher is better</sub> | n/a | n/a | n/a | n/a | n/a |
-| **spurious_telemetry_warning_rate**<br><sub>data problem reported on sound telemetry; lower is better</sub> | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] |
-| mean diagnostic tests run | 0.0 | 0.0 | 3.0 | 0.0 | 3.0 |
-| mean analysis time (ms) | 24 | 2650 | 3033 | 2781 | 3144 |
+| Metric | Alert correlator | LLM only | SentinelOps (no falsification) | SentinelOps (+ falsification) | SentinelOps (+ rehearsal) | SentinelOps (+ falsification + rehearsal) |
+| --- | --- | --- | --- | --- | --- | --- |
+| **detection_recall**<br><sub>faults detected; higher is better</sub> | 40/40 = 100% [91%-100%] | 40/40 = 100% [91%-100%] | 40/40 = 100% [91%-100%] | 40/40 = 100% [91%-100%] | 40/40 = 100% [91%-100%] | 40/40 = 100% [91%-100%] |
+| **false_alarm_rate**<br><sub>incidents raised on healthy traffic; lower is better</sub> | n/a | n/a | n/a | n/a | n/a | n/a |
+| **top1_accuracy**<br><sub>correct cause named (determinable faults); higher is better</sub> | n/a | n/a | n/a | n/a | n/a | n/a |
+| **complete_diagnosis_rate**<br><sub>all causes found (multi-cause faults); higher is better</sub> | n/a | n/a | n/a | n/a | n/a | n/a |
+| **incompleteness_acknowledged_rate**<br><sub>said some symptoms are unexplained (incomplete multi-cause diagnoses); higher is better</sub> | n/a | n/a | n/a | n/a | n/a | n/a |
+| **false_diagnosis_rate**<br><sub>a wrong cause named (all faults); lower is better</sub> | 20/40 = 50% [35%-65%] | 40/40 = 100% [91%-100%] | 40/40 = 100% [91%-100%] | 0/40 = 0% [0%-9%] | 40/40 = 100% [91%-100%] | 0/40 = 0% [0%-9%] |
+| **correct_abstention_rate**<br><sub>abstained when not determinable; higher is better</sub> | 20/40 = 50% [35%-65%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 40/40 = 100% [91%-100%] | 0/40 = 0% [0%-9%] | 40/40 = 100% [91%-100%] |
+| **wrongful_abstention_rate**<br><sub>abstained when a cause was determinable; lower is better</sub> | n/a | n/a | n/a | n/a | n/a | n/a |
+| **incorrect_intervention_rate**<br><sub>wrong action proposed (all faults); lower is better</sub> | 20/40 = 50% [35%-65%] | 40/40 = 100% [91%-100%] | 40/40 = 100% [91%-100%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] |
+| **false_success_rate**<br><sub>claimed recovery that did not happen (of executed actions); lower is better</sub> | 20/20 = 100% [84%-100%] | 40/40 = 100% [91%-100%] | 0/40 = 0% [0%-9%] | n/a | n/a | n/a |
+| **verified_recovery_rate**<br><sub>recovery truly achieved and correctly claimed; higher is better</sub> | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] |
+| **containment_point_accuracy**<br><sub>earliest containment point is the true origin (single-cause faults); higher is better</sub> | n/a | n/a | n/a | n/a | n/a | n/a |
+| **telemetry_issue_flagged_rate**<br><sub>data problem reported (telemetry faults); higher is better</sub> | n/a | n/a | n/a | n/a | n/a | n/a |
+| **spurious_telemetry_warning_rate**<br><sub>data problem reported on sound telemetry; lower is better</sub> | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] | 0/40 = 0% [0%-9%] |
+| mean diagnostic tests run | 0.0 | 0.0 | 0.0 | 3.0 | 0.0 | 3.0 |
+| mean analysis time (ms) | 28 | 64 | 3380 | 3727 | 3416 | 3676 |
 
 ## Answers by scenario
 
 Each cell counts what the system answered across seeds. `abstained` means it detected an incident but named no cause.
 
-| Scenario | Truth | Alert correlator | SentinelOps (no falsification) | SentinelOps (+ falsification) | SentinelOps (+ rehearsal) | SentinelOps (+ falsification + rehearsal) |
-| --- | --- | --- | --- | --- | --- | --- |
-| **S00** Healthy traffic | no fault | not detected x20 | not detected x20 | not detected x20 | not detected x20 | not detected x20 |
-| **S01** Bad checkout deployment | release_regression | release_regression x20 | release_regression x20 | release_regression x20 | release_regression x20 | release_regression x20 |
-| **S02** Database connection-pool exhaustion | db_pool_exhaustion | slow_dependency x20 (wrong action x20) | slow_dependency x20 (wrong action x20) | db_pool_exhaustion x20 | slow_dependency x20 (wrong action x1) | db_pool_exhaustion x20 |
-| **S03** Slow database query | slow_dependency | slow_dependency x20 | slow_dependency x20 | slow_dependency x20 | slow_dependency x20 | slow_dependency x20 |
-| **S04** Cache unavailable | cache_unavailable | slow_dependency x20 (wrong action x20) | slow_dependency x20 (wrong action x20) | cache_unavailable x20 | slow_dependency x20 (wrong action x20) | cache_unavailable x20 |
-| **S05** Payment provider timeout | payment_provider_timeout | abstained x20 | payment_provider_timeout x20 | payment_provider_timeout x20 | payment_provider_timeout x20 | payment_provider_timeout x20 |
-| **S06** CPU saturation | resource_saturation | slow_dependency x20 (wrong action x20) | abstained x20 | resource_saturation x20 | abstained x20 | resource_saturation x20 |
-| **S07** Retry storm | retry_storm | abstained x16; slow_dependency x4 (wrong action x4) | abstained x4; retry_storm x16 | retry_storm x19; slow_dependency x1 (wrong action x1) | abstained x4; retry_storm x16 | retry_storm x19; slow_dependency x1 |
-| **S08** Unexplained errors (ambiguous) | not determinable | abstained x20 | abstained x20 | abstained x20 | abstained x20 | abstained x20 |
-| **S09** Misleading deployment correlation | payment_provider_timeout | release_regression x20 (wrong action x20) | payment_provider_timeout x20 | payment_provider_timeout x20 | payment_provider_timeout x20 | payment_provider_timeout x20 |
-| **S10** Two simultaneous faults | release_regression, slow_dependency | release_regression x20 | release_regression x20 | release_regression x20 | release_regression x20 | release_regression x20 |
-| **S11** Clock running ahead | no fault | not detected x20 | not detected x20 | not detected x20 | not detected x20 | not detected x20 |
-| **P1** Probe: both releases fail | not determinable | release_regression x20 (wrong action x20) | release_regression x20 (wrong action x20) | abstained x20 | release_regression x20 | abstained x20 |
-| **P2** Probe: unrelated payment timeouts | not determinable | abstained x20 | payment_provider_timeout x20 (wrong action x20) | abstained x20 | payment_provider_timeout x20 | abstained x20 |
+| Scenario | Truth | Alert correlator | LLM only | SentinelOps (no falsification) | SentinelOps (+ falsification) | SentinelOps (+ rehearsal) | SentinelOps (+ falsification + rehearsal) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **S00** Healthy traffic | no fault | not detected x20 | not detected x20 | not detected x20 | not detected x20 | not detected x20 | not detected x20 |
+| **S01** Bad checkout deployment | release_regression | release_regression x20 | release_regression x20 | release_regression x20 | release_regression x20 | release_regression x20 | release_regression x20 |
+| **S02** Database connection-pool exhaustion | db_pool_exhaustion | slow_dependency x20 (wrong action x20) | slow_dependency x20 (wrong action x20) | slow_dependency x20 (wrong action x20) | db_pool_exhaustion x20 | slow_dependency x20 (wrong action x1) | db_pool_exhaustion x20 |
+| **S03** Slow database query | slow_dependency | slow_dependency x20 | not detected x1; slow_dependency x19 | slow_dependency x20 | slow_dependency x20 | slow_dependency x20 | slow_dependency x20 |
+| **S04** Cache unavailable | cache_unavailable | slow_dependency x20 (wrong action x20) | not detected x3; slow_dependency x17 (wrong action x17) | slow_dependency x20 (wrong action x20) | cache_unavailable x20 | slow_dependency x20 (wrong action x20) | cache_unavailable x20 |
+| **S05** Payment provider timeout | payment_provider_timeout | abstained x20 | payment_provider_timeout x20 | payment_provider_timeout x20 | payment_provider_timeout x20 | payment_provider_timeout x20 | payment_provider_timeout x20 |
+| **S06** CPU saturation | resource_saturation | slow_dependency x20 (wrong action x20) | abstained x7; not detected x9; resource_saturation x4 | abstained x20 | resource_saturation x20 | abstained x20 | resource_saturation x20 |
+| **S07** Retry storm | retry_storm | abstained x16; slow_dependency x4 (wrong action x4) | payment_provider_timeout x3; retry_storm x17 (wrong action x3) | abstained x4; retry_storm x16 | retry_storm x19; slow_dependency x1 (wrong action x1) | abstained x4; retry_storm x16 | retry_storm x19; slow_dependency x1 |
+| **S08** Unexplained errors (ambiguous) | not determinable | abstained x20 | abstained x18; payment_provider_timeout x2 (wrong action x2) | abstained x20 | abstained x20 | abstained x20 | abstained x20 |
+| **S09** Misleading deployment correlation | payment_provider_timeout | release_regression x20 (wrong action x20) | payment_provider_timeout x17; release_regression x3 (wrong action x3) | payment_provider_timeout x20 | payment_provider_timeout x20 | payment_provider_timeout x20 | payment_provider_timeout x20 |
+| **S10** Two simultaneous faults | release_regression, slow_dependency | release_regression x20 | release_regression x20 | release_regression x20 | release_regression x20 | release_regression x20 | release_regression x20 |
+| **S11** Clock running ahead | no fault | not detected x20 | not detected x20 | not detected x20 | not detected x20 | not detected x20 | not detected x20 |
+| **P1** Probe: both releases fail | not determinable | release_regression x20 (wrong action x20) | release_regression x20 (wrong action x20) | release_regression x20 (wrong action x20) | abstained x20 | release_regression x20 | abstained x20 |
+| **P2** Probe: unrelated payment timeouts | not determinable | abstained x20 | payment_provider_timeout x20 (wrong action x20) | payment_provider_timeout x20 (wrong action x20) | abstained x20 | payment_provider_timeout x20 | abstained x20 |
 
 ## Known gaps
 
@@ -83,4 +81,4 @@ Each cell counts what the system answered across seeds. `abstained` means it det
 - **S11 (clock running ahead)** has no service fault: the right answer is no incident plus a data-quality warning (`telemetry_issue_flagged_rate`). Only SentinelOps checks data quality, so the baselines score 0 there by design.
 - **Rehearsal** can only block an action whose replay clearly fails; when the recorded data cannot show the effect it is inconclusive and does not block. Compare `+ rehearsal` with the plain variant to see what it adds on its own.
 - **S12 (unsafe action)** is covered by policy tests, not here.
-- **LLM-only baseline** runs only when `ANTHROPIC_API_KEY` is set; without it the comparison to an LLM is absent, not assumed.
+- **LLM-only baseline** runs only when `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` is set; without it the comparison to an LLM is absent, not assumed. It sees the same log summary as the correlator, at temperature 0, one call per run. With `LLM_CACHE` its answers can come from disk, and then its analysis time excludes the API call.

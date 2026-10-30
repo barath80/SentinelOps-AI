@@ -4,6 +4,8 @@
 
 This is the first evaluation on telemetry from the deployed system rather than a simulator. It is small (12 labelled incidents), so read the intervals, not just the point values.
 
+**Latest (30 October 2026):** 33 labelled incidents on the deployed system across all eight fault types: SentinelOps (rules + investigation) correct on 31, with 1 wrong recovery action; the shadow model correct on 33; containment point right 18/18. See [the last section](#deployed-system-all-scenarios-live-3-and-live-4-29-and-30-october-2026).
+
 ## How the incidents were produced
 
 - One manual fault (S01, set through the `FAULT_SCENARIO` environment variable), then two rounds of the campaign runner (`services/sentinel-api/campaign/run_campaign.py`).
@@ -101,15 +103,33 @@ The new scenarios (S02, S04, S06, S07, S11) were run against the **production bu
 - *Diagnostics rebuilt incidents from a different window than the analysis.* Rebuilding the labelled incidents found two that no longer reproduced: diagnostics used a fixed 900 s lookback, which reached the previous run's fault traffic and counted it as baseline. Incidents now store their analysis window and diagnostics (and rehearsal) rebuild from exactly that window; a regression test reproduces it.
 - *A suspended host invalidates a run.* One attempt was distorted by a six-hour suspension mid-run (its S03 answer was meaningless). Both runners now mark a run `invalid` when a deliberate wait overruns by a minute or more, instead of scoring it.
 
-## Still to do on the deployed system
+## Deployed system, all scenarios (live-3 and live-4, 29 and 30 October 2026)
 
-The same two tracks have not been run against the deployed shop (Vercel) and API (Render): that needs the new code deployed and the deployment's own secrets, which this run did not use. Commands:
+The full campaign was then run against the **deployed** shop (Vercel) and API (Render), with the deployment's own
+secrets: two rounds covering every scenario (`campaign/results/live-3.jsonl`, `live-4.jsonl`), plus the earlier rounds
+above. `python -m campaign.evaluate --sentinel <api>` over every labelled incident on the live system:
 
-```
-cd services/sentinel-api
-set CHAOS_TOKEN=...  SENTINEL_TOKEN=<machine token>  SENTINEL_OPERATOR=campaign  SENTINEL_OPERATOR_PASSWORD=...
-python -m campaign.run_campaign --shop <shop url> --sentinel <api url> --scenarios S01 S02 S03 S04 S05 S06 S07 S08 none surge S11 --runs 2 --investigate --out campaign/results/live-3.jsonl
-python -m campaign.evaluate --sentinel <api url>
-```
+| System | n | Correct | Incorrect intervention | Missed fixable cause |
+| --- | --- | --- | --- | --- |
+| Rule engine at analysis time | 33 | 24 (72.7%) | 6 (18.2%) | 3 (9.1%) |
+| **Rules + investigation (SentinelOps)** | 33 | **31 (93.9%)** | **1 (3.0%)** | 1 (3.0%) |
+| Shadow model v2 (served logistic regression) | 33 | 33 (100%) | 0 | 0 |
 
-`campaign/e2e_recovery.py` switches the fault globally on the shop instance it targets, so run it only against a shop nobody else is using (not the public demo).
+Labels: release_regression 7, slow_dependency 6, payment_provider_timeout 5, unknown 5, db_pool_exhaustion 3,
+cache_unavailable 3, resource_saturation 2, retry_storm 2. The earliest containment point was the true origin in
+**18 of 18** actionable incidents that had traces. Per incident: `services/sentinel-api/campaign/results/real_evaluation.md`.
+
+- **Investigation is what makes the rules right.** At analysis time the rules called pool exhaustion and a dead cache
+  "slow dependency" and abstained on CPU saturation; the falsification tests (pool wait, cache spans, CPU time) corrected
+  all of them on the live system. The one remaining wrong answer is the real decoy deployment described above, from
+  before the fix.
+- **No false alarms:** healthy and 6x-surge runs raised no incident.
+- **S11 on the live system:** the shop's clock running 4 minutes ahead raised no incident and was flagged as
+  `clock_skew`. The two runs repeated straight after it (S05, S07) also carried the flag, correctly: S11's
+  future-stamped events were still inside their window, which is why the runner schedules S11 last.
+- **Two runs were voided, not scored:** the host running the campaign went to sleep during S05 and S07; the runner
+  marked them invalid and they were rerun.
+
+Recovery through the real executor was run on the real application locally (track 2 above) and not against the
+public demo, because `campaign/e2e_recovery.py` switches the fault for every visitor of the shop it targets. The live
+API keeps the `mock` executor.

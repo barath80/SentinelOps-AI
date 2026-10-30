@@ -130,17 +130,24 @@ flowchart LR
 
 ## Results
 
-| Measure (simulated benchmark, 20 seeds) | Alert correlator | SentinelOps |
-| --- | --- | --- |
-| Correct cause named | 33% | **99%** (179/180) |
-| Wrong recovery action proposed | 42% | **0%** (0/200) |
-| Claimed a recovery that did not happen | 72% | **0%** |
-| True origin named as the containment point | n/a | 98% |
+| Measure (simulated benchmark, 20 seeds) | Alert correlator | LLM only (Gemini 3.5 Flash-Lite) | SentinelOps |
+| --- | --- | --- | --- |
+| Correct cause named | 33% | 65% | **99%** (179/180) |
+| Wrong recovery action proposed | 42% | 22% | **0%** (0/200) |
+| Claimed a recovery that did not happen | 72% | 40% | **0%** |
+| Recovery truly achieved and correctly claimed | 20% | 48% | **80%** |
+| Fooled by a plausible but wrong leader (2 probes, 40 runs) | 50% | 100% | **0%** |
+| Clock-skew telemetry flagged | 0% | 0% | **100%** |
+| True origin named as the containment point | n/a | n/a | 98% |
+
+The LLM reads the same log summary as the correlator, at temperature 0, and may only answer from the allowed causes.
 
 On the real application, every scenario was diagnosed correctly after investigation, all 7
-recoveries succeeded through the real executor, and a rollback restored the fault. On the deployed
-system's 25 labelled incidents, the shadow model was right 25 times and the rules (before
-investigation) 19 times. The scenarios were written by the same author as the system, so these show
+recoveries succeeded through the real executor, and a rollback restored the fault. On the **deployed**
+system, 33 labelled incidents across all eight fault types: SentinelOps (rules + investigation) was
+right on 31 with 1 wrong action, against 24 right and 6 wrong actions for the rules alone; the shadow
+model was right on 33; the containment point was right 18 of 18 times; healthy and surge traffic
+raised no false alarm, and the clock-skew run was flagged. The scenarios were written by the same author as the system, so these show
 the mechanisms work, not that they generalize. Details and intervals:
 [benchmark](docs/benchmark-results.md), [real incidents](docs/real-incidents.md).
 

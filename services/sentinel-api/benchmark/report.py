@@ -83,5 +83,6 @@ def render(result: dict) -> str:
               "is inconclusive and does not block. Compare `+ rehearsal` with the plain variant to see what it adds on its own.",
               "- **S12 (unsafe action)** is covered by policy tests, not here.",
               "- **LLM-only baseline** runs only when `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` is set; without it the comparison to an "
-              "LLM is absent, not assumed. It sees the same log summary as the correlator, at temperature 0, one call per run.", ""]
+              "LLM is absent, not assumed. It sees the same log summary as the correlator, at temperature 0, one call per run. "
+              "With `LLM_CACHE` its answers can come from disk, and then its analysis time excludes the API call.", ""]
     return "\n".join(lines)

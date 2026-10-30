@@ -1,6 +1,6 @@
 # SentinelOps AI: Design and Architecture
 
-Written 29 October 2026. Also available as a shared document with drawn diagrams (export to PDF or Word from there).
+Written 29 to 30 October 2026. Also available as a shared document with drawn diagrams (export to PDF or Word from there).
 
 ## What SentinelOps is
 
@@ -399,7 +399,7 @@ Every step, including every skip and its reason, is written to `automation_runs`
 | Explanation | Per-feature contributions to the top class's score (coefficient times the standardized feature) |
 | Same features in training and serving | Training and the API call the same feature functions, so the model is served exactly what it learned from |
 
-*Why shadow mode, and why logistic regression for serving.* The model was trained on simulated incidents written by the same author as the system. Until it has been measured on enough real incidents, letting it act would put an unvalidated model in charge of production changes. Shadow mode collects that evidence for free: each labelled incident shows whether rules or model were right. On 25 real labelled incidents from the deployed system, the rules (before investigation) were right 19 times and the model 25 times: encouraging, but still too few to promote it. The served model is logistic regression because it is small, needs no native libraries, and its explanation is exact rather than approximated. A pickle file would also execute code when loaded; a JSON of coefficients cannot.
+*Why shadow mode, and why logistic regression for serving.* The model was trained on simulated incidents written by the same author as the system. Until it has been measured on enough real incidents, letting it act would put an unvalidated model in charge of production changes. Shadow mode collects that evidence for free: each labelled incident shows whether rules or model were right. On 33 real labelled incidents from the deployed system, the model was right 33 times, and the rules with investigation 31 times: encouraging, but still too few to promote it. The served model is logistic regression because it is small, needs no native libraries, and its explanation is exact rather than approximated. A pickle file would also execute code when loaded; a JSON of coefficients cannot.
 
 **Insights** (all read-only and computed from stored records)
 
@@ -452,9 +452,9 @@ Under the shift the model's accuracy falls, but it fails safely: it abstains mor
 
 **Served model versus research model.** The random forest's saved file is 168 MB. That is too large for the API image and for git, and loading it would mean unpickling, which can execute code. The API therefore serves a **logistic regression** exported as a 9 KB JSON of means, scales, coefficients and intercepts. It runs in pure Python, with its own abstention threshold of 0.82. Its explanation is exact: each feature's contribution is its coefficient times its standardized value.
 
-**Checked on 29 October 2026.** On 800 fresh simulated incidents from unseen seeds, the served model named a cause for 90% of detected incidents at **98.1% precision** (304 of 310) with standard settings, and 75% at **91.7% precision** (209 of 228) under the shift. On the deployed system's 25 real labelled incidents it was right **25 of 25** times. The rules, before investigation, were right 19 times.
+**Checked on 29 October 2026.** On 800 fresh simulated incidents from unseen seeds, the served model named a cause for 90% of detected incidents at **98.1% precision** (304 of 310) with standard settings, and 75% at **91.7% precision** (209 of 228) under the shift. On the deployed system's 33 real labelled incidents it was right **33 of 33** times. The rules were right 24 times before investigation and 31 times after it.
 
-*Why shadow mode despite these numbers.* The training data is simulated and written by the same author as the system, so part of what the model learned is the simulator's design. Twenty-five real incidents are encouraging but give a wide interval. Shadow mode keeps collecting that real evidence, and the model can be promoted later on the strength of it.
+*Why shadow mode despite these numbers.* The training data is simulated and written by the same author as the system, so part of what the model learned is the simulator's design. Thirty-three real incidents are encouraging but give a wide interval. Shadow mode keeps collecting that real evidence, and the model can be promoted later on the strength of it.
 
 ## The LLM-only baseline (Gemini or Claude)
 
@@ -467,6 +467,32 @@ The research question compares SentinelOps with an LLM that reads the same telem
 - **Providers:** Anthropic Claude (`ANTHROPIC_API_KEY`) or Google Gemini (`GEMINI_API_KEY`; default model `gemini-3.5-flash-lite`). Answers are cached on disk (`LLM_CACHE`), so a run stopped by a free-tier quota resumes without paying twice. A quota or network failure marks the baseline "not run" instead of publishing half a run.
 
 *Why an LLM is a baseline and not the engine.* An LLM is fluent and broadly knowledgeable, which is exactly why it is dangerous here: it can name a cause confidently with no evidence, and its answer cannot be traced back to specific requests. SentinelOps keeps any model in a position where it can be measured, not obeyed.
+
+**Results (30 October 2026, `gemini-3.5-flash-lite`, all 280 runs answered).** The LLM is clearly better than naive correlation and clearly worse than SentinelOps, in exactly the ways the design predicts.
+
+| System | Wrong recovery action (200 simulated fault runs) |
+| --- | --- |
+| Alert correlator | 84/200 = 42% |
+| LLM only (Gemini) | 45/200 = 22.5% |
+| SentinelOps, no falsification | 40/200 = 20% |
+| SentinelOps + rehearsal | 21/200 = 10.5% |
+| SentinelOps + falsification | 1/200 = 0.5% |
+| **SentinelOps, full** | **0/200 = 0%** |
+
+| Measure (main scenarios) | Alert correlator | LLM only | SentinelOps, full |
+| --- | --- | --- | --- |
+| Correct cause named | 60/180 = 33% | 117/180 = 65% | 179/180 = 99% |
+| Claimed a recovery that did not happen | 104/144 = 72% | 65/162 = 40% | 0/179 = 0% |
+| Recovery truly achieved and correctly claimed | 40/200 = 20% | 97/200 = 48% | 159/200 = 80% |
+| Incident detected at all | 100% | 94% | 100% |
+| Clock-skew telemetry flagged | 0/20 | 0/20 | 20/20 |
+
+- **It is fooled by plausible leaders.** On the two falsification probes, where an obvious explanation is wrong and a direct test disproves it, the LLM named the wrong cause in **40 of 40** runs. SentinelOps did so in 0.
+- **It cannot see what logs do not show.** Pool exhaustion, a dead cache and CPU saturation look alike in a log summary; only traces separate them.
+- **It never questions its data.** It did not flag the clock running ahead in any of the 20 S11 runs.
+- **It treats execution as success**, so 40% of its claimed recoveries never happened.
+
+The LLM is not handicapped by the setup: it sees the same log summary as the correlator and needs no reasoning SentinelOps lacks. The gap comes from evidence, falsification and verification, which are the parts SentinelOps adds.
 
 ## Security and operations
 
@@ -601,15 +627,15 @@ Every push to `main` on GitHub runs three CI jobs. When they pass, Render rebuil
 | True origin named as the containment point | not available | 157/160 = 98% |
 | Clock-skew telemetry flagged (S11) | 0/20 | 20/20, with no false warnings in 260 other runs |
 
-The ablation shows where the gain comes from. Falsification alone takes wrong actions from 20% to 0.5%. Rehearsal alone halves them, from 20% to 10%.
+**Answer to the research question: yes.** Against the Gemini LLM baseline, wrong actions fall from 22.5% to 0% and false recovery claims from 40% to 0% (see the LLM baseline section). The ablation shows where the gain comes from. Falsification alone takes wrong actions from 20% to 0.5%. Rehearsal alone halves them, from 20% to 10%.
 
-**On the real application**, with real faults and the real executor: every scenario was diagnosed correctly after investigation (8 of 8 labelled incidents), the containment point was right 7 of 7 times, all 7 recoveries succeeded, and a rollback was verified to restore the fault. On 25 real labelled incidents from the deployed system, the shadow model was right 25 times and the rule engine, before investigation, 19 times.
+**On the real application**, with real faults and the real executor: every scenario was diagnosed correctly after investigation (8 of 8 labelled incidents), the containment point was right 7 of 7 times, all 7 recoveries succeeded, and a rollback was verified to restore the fault. On the deployed system, a campaign across all eight fault types produced 33 real labelled incidents. SentinelOps (rules plus investigation) was right on 31, with 1 wrong recovery action. The rules alone were right on 24, with 6 wrong actions. The shadow model was right on all 33, and the containment point was right 18 of 18 times. Healthy and surge traffic raised no incident, and the live clock-skew run was flagged.
 
 **Honest limits**
 
 - The scenarios were written by the same author as the system, so these numbers show the mechanisms work, not that they generalize to unseen incidents.
 - SentinelOps reads traces and the baselines do not; part of its advantage on S02, S04, S06 and S07 is that extra data.
-- Twenty-five real incidents still give wide confidence intervals.
+- Thirty-three real incidents still give wide confidence intervals.
 - Not built: single sign-on, multiple tenants, a sandbox copy of production (rehearsal replays recorded telemetry instead), a production executor (out of scope by design), and schema migrations.
 
 **How an operator uses it, day to day**
@@ -625,7 +651,7 @@ The ablation shows where the gain comes from. Falsification alone takes wrong ac
 
 ## Access and credentials
 
-| Environment | How to sign in |
+| • Environment | How to sign in |
 | --- | --- |
 | Local stack (`docker compose up --build`) | `admin` / `change-me-local-only`, created on first start; local use only |
 | Local API without Docker | the `username:password` you set in `SENTINEL_BOOTSTRAP_ADMIN` |
